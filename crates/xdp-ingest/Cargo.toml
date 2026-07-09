@@ -1,0 +1,30 @@
+[package]
+name = "xdp-ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AF_XDP/eBPF kernel-bypass ingestion module"
+
+[[bin]]
+name = "af_xdp_daemon"
+path = "src/main.rs"
+
+[dependencies]
+common = { workspace = true }
+helpers = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+bytes = { workspace = true }
+socket2 = { workspace = true }
+aya = { workspace = true }
+aya-log = { workspace = true }
+libc = "0.2"
+nix = { version = "0.27", features = ["socket"] }
+
+[build-dependencies]
+libbpf-cxx = "0.8"

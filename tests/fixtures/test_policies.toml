@@ -1,0 +1,66 @@
+# Test Policy Definitions for ZK Proof System
+
+## Policy 1: Speed Limit Enforcement
+# Ensures vehicle speed stays within safe bounds
+
+policy_id: safety-speed-limit
+description: "Vehicle speed must remain between 0 and 120 km/h"
+constraints:
+  - type: range
+    field: speed_kmh
+    min: 0
+    max: 120
+    
+## Policy 2: Confidence Threshold
+# AI decisions must meet minimum confidence level
+
+policy_id: ai-confidence-threshold
+description: "AI inference confidence must be at least 70%"
+constraints:
+  - type: threshold
+    field: confidence_percent
+    operator: ">="
+    value: 70
+
+## Policy 3: Combined Safety Check
+# Multiple conditions must all be satisfied
+
+policy_id: combined-safety
+description: "Speed, altitude, and battery must all be in safe ranges"
+constraints:
+  - type: and
+    conditions:
+      - type: range
+        field: speed_kmh
+        min: 0
+        max: 100
+      - type: range
+        field: altitude_m
+        min: -100
+        max: 5000
+      - type: threshold
+        field: battery_percent
+        operator: ">="
+        value: 10
+
+## Policy 4: Risk Assessment
+# Action risk level must be acceptable
+
+policy_id: risk-assessment
+description: "Action risk level must be below threshold"
+constraints:
+  - type: threshold
+    field: risk_score
+    operator: "<"
+    value: 50
+
+## Policy 5: Data Residency Compliance
+# Ensure data processing location compliance
+
+policy_id: data-residency
+description: "Data must be processed in approved regions"
+constraints:
+  - type: threshold
+    field: region_compliance_score
+    operator: "=="
+    value: 100

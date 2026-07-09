@@ -1,0 +1,39 @@
+# SovereignEdge Configuration
+
+[agent]
+probe_interval_secs = 5
+latency_threshold_ms = 200
+packet_loss_threshold_pct = 5.0
+jitter_threshold_ms = 50
+max_context_frames = 100
+max_context_bytes = 10485760
+
+[network]
+telemetry_udp_port = 47821
+session_timeout_secs = 300
+
+[pqc]
+# Hybrid key exchange settings
+x25519_enabled = true
+mlkem768_enabled = true
+aes_gcm_key_size = 32
+
+[tee]
+qwen_api_endpoint = "https://dashscope.aliyuncs.com/api/v1"
+sealed_storage_path = "/var/lib/tee/sealed"
+attestation_provider = "alibaba-cas"
+
+[zk]
+# Zero-knowledge proof settings
+enabled = true
+proof_system = "groth16"
+policy_verification = true
+
+[logging]
+level = "info"
+format = "json"
+output = "stdout"
+
+[metrics]
+prometheus_enabled = true
+prometheus_port = 9090

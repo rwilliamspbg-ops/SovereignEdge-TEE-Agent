@@ -1,0 +1,24 @@
+[package]
+name = "pqc-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Post-Quantum Cryptographic transport layer"
+
+[dependencies]
+common = { workspace = true }
+helpers = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+aes-gcm = { workspace = true }
+sha2 = { workspace = true }
+rand_core = { workspace = true }
+rand = { workspace = true }
+ring = { workspace = true }
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+hpke = { version = "0.12", default-features = false, features = ["std", "safe-curves"] }

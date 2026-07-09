@@ -1,0 +1,82 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/xdp-ingest",
+    "crates/pqc-transport",
+    "crates/edge-agent",
+    "crates/tee-gateway",
+    "crates/zk-proofs",
+    "crates/helpers",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["SovereignEdge Team"]
+repository = "https://github.com/rwilliamspbg-ops/SovereignEdge-TEE-Agent"
+description = "Hardware-Secured, Post-Quantum Edge Agent Infrastructure with Zero-Copy Remote Offloading"
+
+[workspace.dependencies]
+# Core async runtime
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging & observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+prometheus = "0.13"
+opentelemetry = "0.21"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+bytes = "1.5"
+
+# Configuration
+config = "0.14"
+figment = { version = "0.10", features = ["toml", "env"] }
+
+# Crypto - PQC
+ring = "0.17"
+aes-gcm = "0.10"
+sha2 = "0.10"
+rand_core = "0.6"
+rand = "0.8"
+# pqcrypto = "0.16"  # Uncomment when ready for full PQC integration
+# oqs = "0.9"  # liboqs bindings
+
+# Networking
+socket2 = "0.5"
+quinn = "0.10"
+
+# eBPF/XDP
+aya = "0.12"
+aya-log = "0.1"
+libbpf-rs = "0.23"
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# Common types shared across crates
+common = { path = "crates/common" }
+helpers = { path = "crates/helpers" }
+
+# Crypto - X25519 for hybrid KEX
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+hpke = { version = "0.12", default-features = false, features = ["std", "safe-curves"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.dev]
+debug = true

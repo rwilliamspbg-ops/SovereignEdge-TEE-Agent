@@ -1,0 +1,17 @@
+[package]
+name = "tee-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "TEE Gateway for confidential Qwen Cloud integration"
+
+[dependencies]
+common = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }

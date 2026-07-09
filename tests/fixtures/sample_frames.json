@@ -1,0 +1,74 @@
+//! Sample telemetry frames for testing and demonstration
+
+[
+  {
+    "frame_id": 1,
+    "source_ip": "192.168.1.100",
+    "dest_ip": null,
+    "timestamp_ns": 1704067200000000000,
+    "payload": "SGVsbG8sIHRoaXMgaXMgc2FtcGxlIHRlbGVtZXRyeSBkYXRhIGZvciBmcmFtZSAx",
+    "metadata": {
+      "latency_ms": 45.2,
+      "packet_loss_pct": 0.5,
+      "jitter_ms": 3.1,
+      "agent_mode": "online",
+      "session_id": "demo-session-001"
+    }
+  },
+  {
+    "frame_id": 2,
+    "source_ip": "192.168.1.100",
+    "dest_ip": null,
+    "timestamp_ns": 1704067200100000000,
+    "payload": "VGhpcyBpcyBmcmFtZSAyIHdpdGggc2xpZ2h0bHkgZWxldmF0ZWQgbGF0ZW5jeQ==",
+    "metadata": {
+      "latency_ms": 78.5,
+      "packet_loss_pct": 1.2,
+      "jitter_ms": 8.3,
+      "agent_mode": "online",
+      "session_id": "demo-session-001"
+    }
+  },
+  {
+    "frame_id": 3,
+    "source_ip": "192.168.1.100",
+    "dest_ip": null,
+    "timestamp_ns": 1704067200200000000,
+    "payload": "RnJhbWUgMyAtIG5ldHdvcmsgY29uZGl0aW9ucyBkZWdyYWRpbmc=",
+    "metadata": {
+      "latency_ms": 215.0,
+      "packet_loss_pct": 5.5,
+      "jitter_ms": 45.2,
+      "agent_mode": "degraded",
+      "session_id": "demo-session-001"
+    }
+  },
+  {
+    "frame_id": 4,
+    "source_ip": "192.168.1.100",
+    "dest_ip": null,
+    "timestamp_ns": 1704067200300000000,
+    "payload": "RnJhbWUgNCAtIG9mZmxpbmUgbW9kZSBhY3RpdmF0ZWQsIGxvY2FsIHByb2Nlc3Npbmc=",
+    "metadata": {
+      "latency_ms": 5500.0,
+      "packet_loss_pct": 75.0,
+      "jitter_ms": 200.0,
+      "agent_mode": "offline",
+      "session_id": "demo-session-001"
+    }
+  },
+  {
+    "frame_id": 5,
+    "source_ip": "192.168.1.100",
+    "dest_ip": null,
+    "timestamp_ns": 1704067200400000000,
+    "payload": "RnJhbWUgNSAtIG5ldHdvcmsgcmVjb3ZlcmVkLCByZXR1cm5pbmcgdG8gb25saW5l",
+    "metadata": {
+      "latency_ms": 52.3,
+      "packet_loss_pct": 0.8,
+      "jitter_ms": 4.5,
+      "agent_mode": "online",
+      "session_id": "demo-session-001"
+    }
+  }
+]

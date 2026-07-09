@@ -1,0 +1,15 @@
+[package]
+name = "helpers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Helper utilities, test fixtures, and builder patterns for SovereignEdge"
+
+[dependencies]
+common = { path = "../common" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

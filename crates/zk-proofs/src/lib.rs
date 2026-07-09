@@ -242,7 +242,7 @@ impl ZkProofGenerator {
                 match operator.as_str() {
                     ">" => Ok(actual as f64 > *value),
                     ">=" => Ok(actual as f64 >= *value),
-                    "<" => Ok(actual as f64 < *value),
+                    "<" => Ok((actual as f64) < *value),
                     "<=" => Ok(actual as f64 <= *value),
                     "==" => Ok((actual as f64 - value).abs() < f64::EPSILON),
                     _ => Err(ZkError::InvalidOperator(operator.clone())),

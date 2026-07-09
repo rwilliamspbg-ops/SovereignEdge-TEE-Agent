@@ -43,9 +43,7 @@ pub struct NetworkQuality {
 impl NetworkQuality {
     /// Check if network is in degraded state
     pub fn is_degraded(&self) -> bool {
-        self.latency_ms > 200.0
-            || self.packet_loss_pct > 5.0
-            || self.jitter_ms > 50.0
+        self.latency_ms > 200.0 || self.packet_loss_pct > 5.0 || self.jitter_ms > 50.0
     }
 
     /// Check if network is effectively offline
@@ -98,7 +96,9 @@ pub enum CommonError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Buffer overflow: attempted to write {requested} bytes but only {available} available")]
+    #[error(
+        "Buffer overflow: attempted to write {requested} bytes but only {available} available"
+    )]
     BufferOverflow { requested: usize, available: usize },
 
     #[error("Configuration error: {0}")]

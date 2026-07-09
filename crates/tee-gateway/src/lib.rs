@@ -78,7 +78,9 @@ impl SealedStorage {
         }
 
         if self.sealed_data.is_empty() {
-            return Err(GatewayError::UnsealingFailed("No sealed data available".to_string()));
+            return Err(GatewayError::UnsealingFailed(
+                "No sealed data available".to_string(),
+            ));
         }
         Ok(self.sealed_data.clone())
     }
@@ -182,10 +184,12 @@ impl TeeGateway {
         // Update session cache
         {
             let mut cache = self.session_cache.lock().unwrap();
-            let session = cache.entry(frame.source_ip.clone()).or_insert(SessionState {
-                last_activity: Instant::now(),
-                frame_count: 0,
-            });
+            let session = cache
+                .entry(frame.source_ip.clone())
+                .or_insert(SessionState {
+                    last_activity: Instant::now(),
+                    frame_count: 0,
+                });
             session.last_activity = Instant::now();
             session.frame_count += 1;
         }
@@ -209,9 +213,7 @@ Respond with structured JSON containing: action, confidence, reasoning."#;
 
         let user_prompt = format!(
             "Telemetry Frame #{} from {}\nData: {}\n\nAnalyze and provide decision:",
-            frame.frame_id,
-            frame.source_ip,
-            context
+            frame.frame_id, frame.source_ip, context
         );
 
         Ok(format!("{}\n\n{}", system_prompt, user_prompt))
@@ -219,7 +221,9 @@ Respond with structured JSON containing: action, confidence, reasoning."#;
 
     /// Call Qwen Cloud API (simulated - in production use reqwest/hyper)
     fn call_qwen_api(&self, prompt: &str) -> Result<QwenResponse> {
-        let api_key = self.qwen_api_key.as_ref()
+        let api_key = self
+            .qwen_api_key
+            .as_ref()
             .ok_or(GatewayError::ApiKeyNotInitialized)?;
 
         info!(
@@ -265,7 +269,7 @@ Respond with structured JSON containing: action, confidence, reasoning."#;
 
         // Hash the log for integrity
         let hash = Sha256::digest(log.as_bytes());
-        
+
         format!("{}|HASH:{:x}", log, hash).into_bytes()
     }
 
@@ -302,10 +306,10 @@ mod tests {
         let secret = b"sk-qwen-test-token-12345";
 
         assert!(storage.seal(secret).is_ok());
-        
+
         // Must attest before unsealing
         assert!(storage.unseal().is_err());
-        
+
         storage.verify_attestation().unwrap();
         let unsealed = storage.unseal();
         assert!(unsealed.is_ok());

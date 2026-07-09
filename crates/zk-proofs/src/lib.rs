@@ -46,11 +46,7 @@ pub struct SafetyPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Constraint {
     /// Value must be within range [min, max]
-    Range {
-        field: String,
-        min: i64,
-        max: i64,
-    },
+    Range { field: String, min: i64, max: i64 },
     /// Value must satisfy threshold comparison
     Threshold {
         field: String,
@@ -58,13 +54,9 @@ pub enum Constraint {
         value: f64,
     },
     /// Logical AND of multiple conditions
-    And {
-        conditions: Vec<Constraint>,
-    },
+    And { conditions: Vec<Constraint> },
     /// Logical OR of multiple conditions
-    Or {
-        conditions: Vec<Constraint>,
-    },
+    Or { conditions: Vec<Constraint> },
 }
 
 /// ZK-SNARK proof structure
@@ -147,7 +139,10 @@ impl ZkProofGenerator {
     pub fn register_policy(&mut self, policy: SafetyPolicy) {
         // In production: compile policy to R1CS/QAP using arkworks or circom
         // Generate verification key for the circuit
-        info!("[ZK] Registered policy: {} - {}", policy.id, policy.description);
+        info!(
+            "[ZK] Registered policy: {} - {}",
+            policy.id, policy.description
+        );
 
         let policy_id = policy.id.clone();
         self.policies.insert(policy_id.clone(), policy);
@@ -217,7 +212,11 @@ impl ZkProofGenerator {
     }
 
     /// Verify constraints against action data
-    fn verify_constraints(&self, constraints: &[Constraint], action_data: &ActionData) -> Result<bool> {
+    fn verify_constraints(
+        &self,
+        constraints: &[Constraint],
+        action_data: &ActionData,
+    ) -> Result<bool> {
         for constraint in constraints {
             if !self.check_constraint(constraint, action_data)? {
                 return Ok(false);
@@ -234,7 +233,11 @@ impl ZkProofGenerator {
                     .ok_or_else(|| ZkError::MissingField(field.clone()))?;
                 Ok(value >= *min && value <= *max)
             }
-            Constraint::Threshold { field, operator, value } => {
+            Constraint::Threshold {
+                field,
+                operator,
+                value,
+            } => {
                 let actual = action_data
                     .get_numeric(field)
                     .ok_or_else(|| ZkError::MissingField(field.clone()))?;

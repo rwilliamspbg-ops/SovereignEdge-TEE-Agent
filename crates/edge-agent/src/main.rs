@@ -4,10 +4,10 @@
 
 use anyhow::Result;
 use clap::Parser;
-use common::{AgentMode, TelemetryFrame, FrameMetadata};
+use common::{AgentMode, FrameMetadata, TelemetryFrame};
 use edge_agent::EdgeAgent;
 use std::sync::Arc;
-use tracing::{info, error};
+use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Debug, Parser)]
@@ -37,7 +37,10 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     info!("SovereignEdge Edge Agent starting...");
-    info!("Probe interval: {}s, Port: {}", args.probe_interval, args.port);
+    info!(
+        "Probe interval: {}s, Port: {}",
+        args.probe_interval, args.port
+    );
 
     // Create edge agent
     let mut agent = EdgeAgent::new(args.probe_interval);

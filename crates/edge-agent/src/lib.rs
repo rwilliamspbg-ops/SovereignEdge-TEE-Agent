@@ -102,7 +102,10 @@ impl EdgeAgent {
         let running = self.running.clone();
         let probe_interval = self.probe_interval;
 
-        info!("Starting network quality monitoring with {:?} interval", probe_interval);
+        info!(
+            "Starting network quality monitoring with {:?} interval",
+            probe_interval
+        );
 
         let handle = running.clone();
         std::thread::spawn(move || {
@@ -162,7 +165,10 @@ impl EdgeAgent {
         let old_mode = self.mode.clone();
         self.mode = AgentMode::Transitioning;
 
-        info!("[EdgeAgent] Mode transition: {:?} -> {:?}", old_mode, new_mode);
+        info!(
+            "[EdgeAgent] Mode transition: {:?} -> {:?}",
+            old_mode, new_mode
+        );
 
         match new_mode {
             AgentMode::Online => {

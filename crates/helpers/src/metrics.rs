@@ -82,7 +82,8 @@ pub fn export_metrics() -> String {
     // In production: gather and format metrics
     "# HELP sovereignedge_frames_processed Total frames processed\n\
      # TYPE sovereignedge_frames_processed counter\n\
-     sovereignedge_frames_processed 0\n".to_string()
+     sovereignedge_frames_processed 0\n"
+        .to_string()
 }
 
 #[cfg(test)]

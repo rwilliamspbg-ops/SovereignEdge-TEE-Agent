@@ -1,7 +1,7 @@
 //! Test fixtures and sample data for testing
 
-use common::{AgentMode, FrameMetadata, NetworkQuality, TelemetryFrame};
 use crate::builders::{NetworkQualityBuilder, TelemetryFrameBuilder};
+use common::{AgentMode, FrameMetadata, NetworkQuality, TelemetryFrame};
 
 /// Generate a sample telemetry frame for testing
 pub fn sample_frame() -> TelemetryFrame {

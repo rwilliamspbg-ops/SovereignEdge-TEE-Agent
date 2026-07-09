@@ -10,7 +10,7 @@ use common::{FrameMetadata, TelemetryFrame};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Debug, Parser)]
@@ -167,10 +167,8 @@ async fn main() -> Result<()> {
 
     // Run receive loop in background task
     let running = xdp_sock.running.clone();
-    
-    let handle = tokio::task::spawn_blocking(move || {
-        xdp_sock.receive_loop()
-    });
+
+    let handle = tokio::task::spawn_blocking(move || xdp_sock.receive_loop());
 
     // Set up signal handlers
     tokio::signal::ctrl_c().await?;
@@ -178,7 +176,7 @@ async fn main() -> Result<()> {
 
     // Stop the socket
     xdp_sock.stop();
-    
+
     // Wait for receive loop to finish
     match handle.await {
         Ok(Ok(())) => info!("AF_XDP daemon shut down cleanly"),

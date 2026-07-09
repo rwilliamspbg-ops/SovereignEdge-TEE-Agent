@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 pub mod builders;
 pub mod fixtures;
-pub mod time;
 pub mod metrics;
+pub mod time;
 
 // Re-export commonly used items
 pub use builders::*;

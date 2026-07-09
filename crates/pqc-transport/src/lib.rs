@@ -113,7 +113,9 @@ impl PqcSession {
 
     pub fn encrypt(&mut self, plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>> {
         if self.send_nonce >= (1u128 << 64) {
-            return Err(PqcError::NonceExhausted { session_id: self.session_id });
+            return Err(PqcError::NonceExhausted {
+                session_id: self.session_id,
+            });
         }
 
         let nonce_bytes = self.send_nonce.to_le_bytes();
@@ -124,7 +126,8 @@ impl PqcSession {
             aad: associated_data,
         };
 
-        let ciphertext = self.send_key
+        let ciphertext = self
+            .send_key
             .encrypt(nonce, payload)
             .map_err(|e| PqcError::EncryptionFailed(e.to_string()))?;
 
@@ -136,17 +139,23 @@ impl PqcSession {
 
     pub fn decrypt(&mut self, ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>> {
         if self.recv_nonce >= (1u128 << 64) {
-            return Err(PqcError::NonceExhausted { session_id: self.session_id });
+            return Err(PqcError::NonceExhausted {
+                session_id: self.session_id,
+            });
         }
 
         let nonce_bytes = self.recv_nonce.to_le_bytes();
         let nonce = Nonce::from_slice(&nonce_bytes[0..12]);
 
-        let plaintext = self.recv_key
-            .decrypt(nonce, Payload {
-                msg: ciphertext,
-                aad: associated_data,
-            })
+        let plaintext = self
+            .recv_key
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: ciphertext,
+                    aad: associated_data,
+                },
+            )
             .map_err(|e| PqcError::DecryptionFailed(e.to_string()))?;
 
         self.recv_nonce += 1;
@@ -178,7 +187,7 @@ impl HybridKem {
         // Generate X25519 key pair using x25519-dalek
         let x25519_secret = X25519StaticSecret::random_from_rng(OsRng);
         let x25519_pubkey: X25519PublicKey = (&x25519_secret).into();
-        
+
         // Generate ML-KEM-768 key pair (placeholder - use pqcrypto in production)
         let mut mlkem_seckey = [0u8; MLKEM768_SECRET_KEY_SIZE];
         let mut mlkem_pubkey = [0u8; MLKEM768_PUBLIC_KEY_SIZE];
@@ -206,7 +215,8 @@ impl HybridKem {
         )?;
 
         // ML-KEM-768 encapsulation (placeholder)
-        let (_mlkem_ciphertext, mlkem_shared) = Self::mlkem_encapsulate(&remote_public.mlkem_pubkey)?;
+        let (_mlkem_ciphertext, mlkem_shared) =
+            Self::mlkem_encapsulate(&remote_public.mlkem_pubkey)?;
 
         // Combine both shared secrets via HKDF-like construction
         let mut combined = [0u8; HYBRID_SHARED_SECRET_SIZE];
@@ -234,13 +244,12 @@ impl HybridKem {
         let eph_x25519_pubkey: X25519PublicKey = (&eph_x25519_secret).into();
 
         // X25519 DH with remote using real implementation
-        let x25519_shared = self.x25519_dh_real(
-            &eph_x25519_secret.to_bytes(),
-            &remote_public.x25519_pubkey,
-        )?;
+        let x25519_shared =
+            self.x25519_dh_real(&eph_x25519_secret.to_bytes(), &remote_public.x25519_pubkey)?;
 
         // ML-KEM encapsulation (placeholder)
-        let (mlkem_ciphertext, mlkem_shared) = Self::mlkem_encapsulate(&remote_public.mlkem_pubkey)?;
+        let (mlkem_ciphertext, mlkem_shared) =
+            Self::mlkem_encapsulate(&remote_public.mlkem_pubkey)?;
 
         let encapsulation = HybridEncapsulation {
             x25519_ephemeral_pubkey: eph_x25519_pubkey.to_bytes(),
@@ -270,7 +279,9 @@ impl HybridKem {
         Ok(shared.to_bytes())
     }
 
-    fn mlkem_encapsulate(_pubkey: &[u8; MLKEM768_PUBLIC_KEY_SIZE]) -> Result<([u8; MLKEM768_CIPHERTEXT_SIZE], [u8; 32])> {
+    fn mlkem_encapsulate(
+        _pubkey: &[u8; MLKEM768_PUBLIC_KEY_SIZE],
+    ) -> Result<([u8; MLKEM768_CIPHERTEXT_SIZE], [u8; 32])> {
         // Placeholder - in production use kyber/pqcrypto crate
         let mut ciphertext = [0u8; MLKEM768_CIPHERTEXT_SIZE];
         let mut shared_secret = [0u8; 32];
@@ -317,15 +328,15 @@ impl PqcTransportManager {
         recv_key_material[32..64].copy_from_slice(b"RECV");
         let recv_key = Sha256::digest(&recv_key_material);
 
-        let session = PqcSession::new(
-            send_key.into(),
-            recv_key.into(),
-        );
+        let session = PqcSession::new(send_key.into(), recv_key.into());
 
         let arc_session = Arc::new(Mutex::new(session));
         self.sessions.lock().unwrap().push(arc_session.clone());
 
-        debug!("Established new PQC session: {}", arc_session.lock().unwrap().session_id());
+        debug!(
+            "Established new PQC session: {}",
+            arc_session.lock().unwrap().session_id()
+        );
         Ok(arc_session)
     }
 
@@ -338,7 +349,7 @@ impl PqcTransportManager {
         use serde_json::to_vec;
 
         let mut sess = session.lock().unwrap();
-        
+
         // Serialize frame metadata as associated data
         let meta_json = to_vec(&frame.metadata).unwrap_or_default();
         let associated_data = meta_json.as_slice();
@@ -413,7 +424,9 @@ mod tests {
         let local_kem = HybridKem::generate().unwrap();
         let remote_kem = HybridKem::generate().unwrap();
 
-        manager.establish_session(&local_kem, remote_kem.public_key()).unwrap();
+        manager
+            .establish_session(&local_kem, remote_kem.public_key())
+            .unwrap();
         assert_eq!(manager.session_count(), 1);
 
         // Cleanup should not remove fresh sessions

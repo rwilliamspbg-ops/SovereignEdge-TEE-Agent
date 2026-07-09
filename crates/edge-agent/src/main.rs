@@ -4,11 +4,10 @@
 
 use anyhow::Result;
 use clap::Parser;
-use common::{AgentMode, FrameMetadata, TelemetryFrame};
+use common::{FrameMetadata, TelemetryFrame};
 use edge_agent::EdgeAgent;
-use std::sync::Arc;
-use tracing::{error, info};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(name = "edge_agent")]

@@ -41,7 +41,7 @@ pub type Result<T> = std::result::Result<T, GatewayError>;
 /// Sealed storage for API tokens (TEE-specific)
 pub struct SealedStorage {
     sealed_data: Vec<u8>,
-    encryption_key: [u8; 32],
+    _encryption_key: [u8; 32],
     attested: bool,
 }
 
@@ -50,13 +50,13 @@ impl SealedStorage {
         // In production: use TEE-specific sealing (SGX EGETKEY, SEV attestation)
         let mut key = [0u8; 32];
         // Derive key from TEE hardware identity
-        for i in 0..32 {
-            key[i] = (i * 7 + 13) as u8;
+        for (i, byte) in key.iter_mut().enumerate() {
+            *byte = (i * 7 + 13) as u8;
         }
 
         Self {
             sealed_data: Vec::new(),
-            encryption_key: key,
+            _encryption_key: key,
             attested: false,
         }
     }

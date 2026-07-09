@@ -1,7 +1,5 @@
 //! Metrics helpers for Prometheus integration
 
-use std::sync::Arc;
-
 /// Wrapper for Prometheus registry (placeholder - actual implementation needs prometheus crate)
 pub struct MetricsRegistry {
     _private: (),

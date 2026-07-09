@@ -9,9 +9,9 @@ use clap::Parser;
 use common::{FrameMetadata, TelemetryFrame};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
-use tracing_subscriber::{fmt, EnvFilter};
+use std::time::Duration;
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(name = "af_xdp_daemon")]
@@ -90,6 +90,10 @@ impl XdpSocket {
 
         let frame_size = 2048;
         let frame_count = (ring_size_kb * 1024) / frame_size;
+        info!(
+            "Allocating UMEM with {} frames of {} bytes",
+            frame_count, frame_size
+        );
 
         Ok(Self {
             iface: iface.to_string(),
@@ -101,7 +105,10 @@ impl XdpSocket {
     }
 
     fn receive_loop(&mut self) -> Result<()> {
-        info!("Starting AF_XDP receive loop...");
+        info!(
+            "Starting AF_XDP receive loop on {} queue {}...",
+            self.iface, self.queue_id
+        );
 
         while self.running.load(Ordering::Relaxed) {
             // In production:
@@ -113,6 +120,19 @@ impl XdpSocket {
             // Simulated packet reception for now
             std::thread::sleep(Duration::from_micros(100));
 
+            if self.umem.frame_count > 0 {
+                let frame = self.umem.get_frame_mut(0);
+                let packet_len = 100.min(frame.len());
+                frame[..packet_len].fill(0xAB);
+
+                if let Some(_telemetry) = parse_telemetry_frame(
+                    &self.umem.get_frame(0)[..packet_len],
+                    self.stats.packets_received + 1,
+                ) {
+                    // In production this frame would be forwarded downstream.
+                }
+            }
+
             // Mock statistics update
             self.stats.packets_received += 1;
             self.stats.bytes_received += 100;
@@ -120,10 +140,6 @@ impl XdpSocket {
 
         info!("AF_XDP receive loop stopped");
         Ok(())
-    }
-
-    fn stop(&mut self) {
-        self.running.store(false, Ordering::Relaxed);
     }
 
     fn get_stats(&self) -> &SocketStats {
@@ -168,28 +184,40 @@ async fn main() -> Result<()> {
     // Run receive loop in background task
     let running = xdp_sock.running.clone();
 
-    let handle = tokio::task::spawn_blocking(move || xdp_sock.receive_loop());
+    let handle = tokio::task::spawn_blocking(move || {
+        let result = xdp_sock.receive_loop();
+        (xdp_sock, result)
+    });
 
     // Set up signal handlers
     tokio::signal::ctrl_c().await?;
     info!("Received shutdown signal");
 
     // Stop the socket
-    xdp_sock.stop();
+    running.store(false, Ordering::Relaxed);
 
     // Wait for receive loop to finish
     match handle.await {
-        Ok(Ok(())) => info!("AF_XDP daemon shut down cleanly"),
-        Ok(Err(e)) => error!("AF_XDP daemon error: {}", e),
+        Ok((xdp_sock, Ok(()))) => {
+            info!("AF_XDP daemon shut down cleanly");
+            info!(
+                "Final stats: {} packets, {} bytes, {} errors",
+                xdp_sock.get_stats().packets_received,
+                xdp_sock.get_stats().bytes_received,
+                xdp_sock.get_stats().errors
+            );
+        }
+        Ok((xdp_sock, Err(e))) => {
+            error!("AF_XDP daemon error: {}", e);
+            info!(
+                "Final stats: {} packets, {} bytes, {} errors",
+                xdp_sock.get_stats().packets_received,
+                xdp_sock.get_stats().bytes_received,
+                xdp_sock.get_stats().errors
+            );
+        }
         Err(e) => error!("Task join error: {}", e),
     }
-
-    info!(
-        "Final stats: {} packets, {} bytes, {} errors",
-        xdp_sock.get_stats().packets_received,
-        xdp_sock.get_stats().bytes_received,
-        xdp_sock.get_stats().errors
-    );
 
     Ok(())
 }

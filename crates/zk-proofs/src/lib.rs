@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
-use tracing::{debug, info};
+use tracing::info;
 
 /// ZK Proof errors
 #[derive(Error, Debug)]
@@ -149,8 +149,8 @@ impl ZkProofGenerator {
 
         // Generate mock verification key
         let mut vk = vec![0u8; 32];
-        for i in 0..32 {
-            vk[i] = (i + policy_id.len()) as u8;
+        for (i, byte) in vk.iter_mut().enumerate().take(32) {
+            *byte = (i + policy_id.len()) as u8;
         }
         self.verification_keys.insert(policy_id, vk);
     }

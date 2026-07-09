@@ -11,8 +11,6 @@
 //! - **Builder patterns**: Fluent construction of complex types
 //! - **Metrics helpers**: Prometheus metric registration
 
-use std::time::{Duration, Instant};
-
 pub mod builders;
 pub mod fixtures;
 pub mod metrics;

@@ -13,7 +13,7 @@ use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::debug;
 
 // Re-export x25519-dalek for real implementations
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
@@ -93,7 +93,6 @@ pub struct PqcSession {
     recv_key: Aes256Gcm,
     send_nonce: u128,
     recv_nonce: u128,
-    created_at: u64,
     last_activity: u64,
 }
 
@@ -106,7 +105,6 @@ impl PqcSession {
             recv_key: Aes256Gcm::new_from_slice(&recv_key).unwrap(),
             send_nonce: 0,
             recv_nonce: 0,
-            created_at: now,
             last_activity: now,
         }
     }
@@ -165,7 +163,7 @@ impl PqcSession {
     }
 
     pub fn is_expired(&self, timeout_nanos: u64) -> bool {
-        let elapsed = helpers::time::elapsed_ns(self.last_activity);
+        let elapsed = helpers::time::now_ns().saturating_sub(self.last_activity);
         elapsed > timeout_nanos
     }
 
@@ -225,7 +223,7 @@ impl HybridKem {
 
         // Derive final key via SHA-256
         let mut hasher = Sha256::new();
-        hasher.update(&combined);
+        hasher.update(combined);
         let result = hasher.finalize();
 
         let mut final_key = [0u8; 32];
@@ -262,7 +260,7 @@ impl HybridKem {
         combined[32..64].copy_from_slice(&mlkem_shared);
 
         let mut hasher = Sha256::new();
-        hasher.update(&combined);
+        hasher.update(combined);
         let result = hasher.finalize();
 
         let mut shared_key = [0u8; 32];
@@ -320,13 +318,13 @@ impl PqcTransportManager {
         // Derive separate send/recv keys using domain separation
         let mut send_key_material = [0u8; 64];
         send_key_material[0..32].copy_from_slice(&shared_key);
-        send_key_material[32..64].copy_from_slice(b"SEND");
-        let send_key = Sha256::digest(&send_key_material);
+        send_key_material[32..36].copy_from_slice(b"SEND");
+        let send_key = Sha256::digest(send_key_material);
 
         let mut recv_key_material = [0u8; 64];
         recv_key_material[0..32].copy_from_slice(&shared_key);
-        recv_key_material[32..64].copy_from_slice(b"RECV");
-        let recv_key = Sha256::digest(&recv_key_material);
+        recv_key_material[32..36].copy_from_slice(b"RECV");
+        let recv_key = Sha256::digest(recv_key_material);
 
         let session = PqcSession::new(send_key.into(), recv_key.into());
 

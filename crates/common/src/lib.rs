@@ -53,19 +53,14 @@ impl NetworkQuality {
 }
 
 /// Agent operating modes
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentMode {
+    #[default]
     Online,
     Degraded,
     Offline,
     Transitioning,
-}
-
-impl Default for AgentMode {
-    fn default() -> Self {
-        AgentMode::Online
-    }
 }
 
 /// PQC hybrid public key
@@ -130,16 +125,14 @@ impl ContextBuffer {
 
         // Evict oldest frames if necessary
         while self.total_bytes + frame_size > self.max_bytes && !self.frames.is_empty() {
-            if let Some(oldest) = self.frames.remove(0) {
-                self.total_bytes = self.total_bytes.saturating_sub(oldest.payload.len());
-            }
+            let oldest = self.frames.remove(0);
+            self.total_bytes = self.total_bytes.saturating_sub(oldest.payload.len());
         }
 
         // Enforce max frames limit
         while self.frames.len() >= self.max_frames && !self.frames.is_empty() {
-            if let Some(oldest) = self.frames.remove(0) {
-                self.total_bytes = self.total_bytes.saturating_sub(oldest.payload.len());
-            }
+            let oldest = self.frames.remove(0);
+            self.total_bytes = self.total_bytes.saturating_sub(oldest.payload.len());
         }
 
         self.total_bytes += frame_size;

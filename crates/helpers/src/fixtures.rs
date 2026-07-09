@@ -18,7 +18,7 @@ pub fn sample_frame_with_id(id: u64) -> TelemetryFrame {
     TelemetryFrameBuilder::new()
         .with_frame_id(id)
         .with_source_ip("192.168.1.100")
-        .with_payload_str(format!("telemetry frame {}", id))
+        .with_payload_str(&format!("telemetry frame {}", id))
         .build()
         .unwrap()
 }
@@ -78,7 +78,7 @@ pub fn frame_with_quality(frame_id: u64, quality: &NetworkQuality) -> TelemetryF
     TelemetryFrameBuilder::new()
         .with_frame_id(frame_id)
         .with_source_ip("192.168.1.100")
-        .with_payload_str(format!("frame {} data", frame_id))
+        .with_payload_str(&format!("frame {} data", frame_id))
         .with_metadata(metadata)
         .build()
         .unwrap()

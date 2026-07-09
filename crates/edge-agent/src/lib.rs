@@ -10,7 +10,7 @@ use common::{AgentMode, ContextBuffer, NetworkQuality, TelemetryFrame};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
@@ -39,7 +39,7 @@ pub struct InferenceResult {
     pub source: InferenceSource,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InferenceSource {
     Cloud,
@@ -184,8 +184,8 @@ impl EdgeAgent {
             AgentMode::Transitioning => {}
         }
 
-        self.mode = new_mode;
-        self.last_mode = old_mode;
+        self.mode = new_mode.clone();
+        self.last_mode = old_mode.clone();
         self.stats.mode_transitions += 1;
 
         if let Some(ref callback) = self.mode_change_callback {

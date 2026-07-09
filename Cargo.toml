@@ -70,7 +70,7 @@ helpers = { path = "crates/helpers" }
 
 # Crypto - X25519 for hybrid KEX
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
-hpke = { version = "0.12", default-features = false, features = ["std", "safe-curves"] }
+hpke = { version = "0.12", default-features = false, features = ["std", "x25519"] }
 
 [profile.release]
 lto = true

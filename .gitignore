@@ -54,3 +54,5 @@ htmlcov/
 .gradle/
 **/target/
 ```
+# Lean build artifacts
+verification/.lake/

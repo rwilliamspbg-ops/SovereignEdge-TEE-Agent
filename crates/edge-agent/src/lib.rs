@@ -14,6 +14,11 @@ use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
+pub mod hardware;
+pub mod inference;
+
+use inference::{InferenceBackend, SimulatedBackend};
+
 /// Edge Agent errors
 #[derive(Error, Debug)]
 pub enum AgentError {
@@ -58,6 +63,7 @@ pub struct EdgeAgent {
     running: Arc<Mutex<bool>>,
     frame_counter: u64,
     stats: AgentStats,
+    local_backend: Box<dyn InferenceBackend>,
 }
 
 #[derive(Default)]
@@ -87,7 +93,14 @@ impl EdgeAgent {
             running: Arc::new(Mutex::new(false)),
             frame_counter: 0,
             stats: AgentStats::default(),
+            local_backend: Box::new(SimulatedBackend),
         }
+    }
+
+    /// Replace the local inference backend (default: simulated)
+    pub fn set_local_backend(&mut self, backend: Box<dyn InferenceBackend>) {
+        info!("[EdgeAgent] Local inference backend: {}", backend.name());
+        self.local_backend = backend;
     }
 
     pub fn set_mode_change_callback<F>(&mut self, callback: F)
@@ -151,6 +164,10 @@ impl EdgeAgent {
         }
     }
 
+    /// Mode classification is machine-verified in
+    /// `verification/SovereignEdge/ModeMachine.lean`: `offline_implies_degraded`
+    /// (threshold nesting), `determineMode_*_iff` (exact characterization), and
+    /// `determineMode_monotone` (worse network never yields a less severe mode).
     fn determine_mode(&self) -> AgentMode {
         if self.network_quality.is_offline() {
             AgentMode::Offline
@@ -254,19 +271,44 @@ impl EdgeAgent {
         }
     }
 
-    /// Local inference using embedded model
-    fn process_local_inference(&self, frame: &TelemetryFrame) -> InferenceResult {
-        info!("[EdgeAgent] Local inference: {} bytes", frame.payload.len());
+    /// Local inference via the configured backend (llama.cpp or simulated)
+    fn process_local_inference(&mut self, frame: &TelemetryFrame) -> InferenceResult {
+        info!(
+            "[EdgeAgent] Local inference ({}): {} bytes",
+            self.local_backend.name(),
+            frame.payload.len()
+        );
 
-        // In production: run ONNX model via candle or llama.cpp bindings
-        InferenceResult {
-            action: "LOCAL_SAFETY_CHECK".to_string(),
-            confidence: 0.75,
-            metadata: [("model".to_string(), "qwen2.5-0.5b".to_string())]
+        let prompt = format!(
+            "Telemetry from {}: {}\nSafety assessment:",
+            frame.source_ip,
+            String::from_utf8_lossy(&frame.payload)
+        );
+
+        match self.local_backend.infer(&prompt, 32) {
+            Ok(output) => InferenceResult {
+                action: output.text.trim().to_string(),
+                confidence: 0.75,
+                metadata: [
+                    ("model".to_string(), output.model_name),
+                    ("backend".to_string(), self.local_backend.name().to_string()),
+                    ("tokens".to_string(), output.tokens_generated.to_string()),
+                ]
                 .into_iter()
                 .collect(),
-            timestamp: helpers::time::now_ns(),
-            source: InferenceSource::Local,
+                timestamp: helpers::time::now_ns(),
+                source: InferenceSource::Local,
+            },
+            Err(e) => {
+                warn!("[EdgeAgent] Local inference failed: {}", e);
+                InferenceResult {
+                    action: "INFERENCE_ERROR".to_string(),
+                    confidence: 0.0,
+                    metadata: [("error".to_string(), e.to_string())].into_iter().collect(),
+                    timestamp: helpers::time::now_ns(),
+                    source: InferenceSource::Local,
+                }
+            }
         }
     }
 

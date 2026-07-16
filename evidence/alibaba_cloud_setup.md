@@ -1,18 +1,26 @@
-# Alibaba Cloud TEE Deployment Evidence
+# Alibaba Cloud TEE Deployment Runbook
 
-This directory contains proof of deployment on Alibaba Cloud infrastructure for the SovereignEdge-TEE-Agent project.
+> **Status: PLANNED — deployment has not been performed.**
+> This document is a runbook: the steps to execute and the evidence to
+> capture when the deployment happens. Nothing below is a record of a
+> completed deployment. When each step is performed, replace the
+> `TODO(capture)` markers with real command output, keep raw logs in this
+> directory, and update the status line above.
 
-## Deployment Configuration
+## 1. Provision the Confidential VM
 
-### Confidential VM Specification
+Target specification (choose one instance family and one region at
+deployment time):
 
-- **Instance Type**: ecs.g7t (Intel SGX-enabled) or ecs.c7t (AMD SEV-enabled)
-- **Region**: ap-southeast-1 (Singapore) / cn-hangzhou (Hangzhou)
-- **vCPU**: 8 cores
-- **Memory**: 32 GB
-- **OS**: Alibaba Cloud Linux 3 (kernel 5.10+)
+- **Instance type**: `ecs.g7t.xlarge` (Intel SGX) — or `ecs.c7t` (AMD SEV)
+- **Region**: pick per data-residency requirement (e.g. `ap-southeast-1` or `cn-hangzhou`)
+- **vCPU / RAM**: 8 cores / 32 GB
+- **OS**: Alibaba Cloud Linux 3 (kernel 5.10+, eBPF support)
 
-### TEE Environment Setup
+`TODO(capture)`: real instance ID, region, and the console screenshot after
+provisioning.
+
+## 2. TEE Environment Setup
 
 ```bash
 # Install SGX/SEV drivers
@@ -25,18 +33,38 @@ yum install -y sgx-driver sev-guest
 cat /sys/kernel/debug/x86/sgx/enclaves
 ```
 
-### Network Security Group Rules
+`TODO(capture)`: full output of `attestation_verify` and the CAS
+(Confidential Attestation Service) report JSON — including the real
+enclave measurement hash.
 
-| Direction | Protocol | Port Range | Source/Destination | Description |
-|-----------|----------|------------|-------------------|-------------|
-| Inbound   | UDP      | 47821      | 0.0.0.0/0         | Edge telemetry ingestion |
-| Inbound   | TCP      | 443        | 0.0.0.0/0         | HTTPS API (Qwen Cloud) |
-| Outbound  | TCP      | 443        | 0.0.0.0/0         | Qwen Cloud API calls |
-| Outbound  | UDP      | 47821      | 0.0.0.0/0         | Response to edge nodes |
+## 3. Security Group Rules
 
-## API Integration Proof
+| Direction | Protocol | Port | Source/Destination | Purpose |
+|-----------|----------|------|--------------------|---------|
+| Inbound   | UDP      | 47821 | edge node CIDR only | Edge telemetry ingestion |
+| Outbound  | TCP      | 443   | dashscope.aliyuncs.com | Qwen Cloud API calls |
+| Outbound  | UDP      | 47821 | edge node CIDR only | Responses to edge nodes |
 
-### Qwen Cloud API Configuration
+Note: restrict inbound to known edge CIDRs — do **not** use `0.0.0.0/0`
+for the telemetry port in production.
+
+`TODO(capture)`: security-group rule listing from the console or
+`aliyun ecs DescribeSecurityGroupAttribute`.
+
+## 4. Deploy the Gateway
+
+Prerequisite (code work, tracked in the repo): `tee-gateway` is currently
+a library crate — a binary target with real HTTP calls to the Qwen API
+(`call_qwen_api` is mocked today) and real SGX/SEV sealing
+(`SealedStorage` is simulated today) must exist before this step is
+meaningful.
+
+```bash
+cargo build --release -p tee-gateway   # once a binary target exists
+scp target/release/tee_gateway <instance>:/opt/sovereign-edge/
+```
+
+Qwen API configuration to apply on the instance:
 
 ```yaml
 qwen_api:
@@ -47,121 +75,36 @@ qwen_api:
   retry_count: 3
 ```
 
-### Sealed Storage Verification
+`TODO(capture)`: `ps aux` showing the running gateway, `ss -tuln` showing
+the bound UDP port, and one real request/response pair (token redacted).
 
-The Qwen API token is sealed using TEE-specific key derivation:
+## 5. Evidence to Capture for Submission
 
-```rust
-// Token sealing occurs inside the enclave
-let storage = SealedStorage::new();
-storage.seal(api_token_bytes)?;
+When the deployment is real, this directory should contain:
 
-// Unsealing only works within the same TEE instance
-let unsealed = storage.unseal()?;
-assert_eq!(unsealed, original_token);
-```
+1. Instance details (ID, type, region) + console screenshot
+2. Raw CAS attestation report JSON with the real enclave hash
+3. Security-group listing
+4. Gateway process + socket listing from the instance
+5. Latency/throughput measurements from an actual edge node, with the
+   measurement methodology (tool, duration, frame sizes)
+6. Measured Qwen API response times (not vendor-published numbers)
+7. Monthly cost readout from the billing console after a representative day
 
-## Deployment Screenshots
+## Cost Estimate (pre-deployment, from published pricing)
 
-### 1. ECS Instance with TEE Enabled
-
-```
-Instance ID: i-bp1234567890abcdef
-Instance Name: sovereign-edge-tee-gateway
-Instance Type: ecs.g7t.xlarge
-Status: Running
-TEE Status: Attested ✓
-SGX EPC Size: 64 MB
-```
-
-### 2. Network Traffic Monitoring
-
-```
-# ss -tuln | grep 47821
-UDP  UNCONN  0.0.0.0:47821  *:*
-
-# netstat -an | grep ESTABLISHED | wc -l
-47  # Active connections from edge nodes
-```
-
-### 3. TEE Gateway Process Status
-
-```
-# ps aux | grep tee_gateway
-root  1234  2.3  1.5  458932  49152  ?  Sl   10:23   1:45  ./tee_gateway --enclave
-
-# Enclave memory usage:
-# cat /sys/fs/cgroup/memory/tee/enclave_memory_usage
-52428800  # 50 MB EPC memory in use
-```
-
-## Performance Metrics
-
-### Latency Measurements (Edge → TEE Gateway)
-
-| Metric | Value |
-|--------|-------|
-| Average RTT | 45 ms |
-| P95 Latency | 78 ms |
-| P99 Latency | 120 ms |
-| Packet Loss | < 0.1% |
-
-### Throughput Statistics
-
-| Metric | Value |
-|--------|-------|
-| Max Frames/sec | 15,000 |
-| Avg Frame Size | 1.2 KB |
-| Bandwidth Utilization | 144 Mbps peak |
-
-### Qwen API Response Times
-
-| Model | Avg Response Time | Tokens/sec |
-|-------|------------------|------------|
-| qwen-max | 850 ms | 120 |
-| qwen-plus | 450 ms | 200 |
-| qwen-turbo | 200 ms | 450 |
-
-## Attestation Report
-
-Generated by Alibaba Cloud CAS (Confidential Attestation Service):
-
-```json
-{
-  "attestation_id": "att-20240619-abc123",
-  "timestamp": "2024-06-19T10:23:45Z",
-  "tee_type": "SGX",
-  "enclave_hash": "sha256:a1b2c3d4e5f6...",
-  "quote_status": "VALID",
-  "platform_tcb_level": 1,
-  "advisory_ids": [],
-  "verification_result": "PASS"
-}
-```
-
-## Cost Estimate
-
-Monthly running costs for production deployment:
-
-| Component | Unit Price | Quantity | Monthly Cost |
+| Component | Unit Price | Quantity | Monthly Est. |
 |-----------|-----------|----------|--------------|
-| ecs.g7t.xlarge | $0.15/hr | 1 | $108 |
-| Data Transfer | $0.08/GB | 500 GB | $40 |
-| Qwen API Calls | $0.002/1K tokens | 5M tokens | $10 |
+| ecs.g7t.xlarge | $0.15/hr | 1 | ~$108 |
+| Data Transfer | $0.08/GB | 500 GB | ~$40 |
+| Qwen API Calls | $0.002/1K tokens | 5M tokens | ~$10 |
 | **Total** | | | **~$158/month** |
 
-## Compliance Notes
+These are estimates from published pricing, not billed amounts.
 
-1. **Data Residency**: All processing occurs within Alibaba Cloud regions
-2. **Encryption**: Data encrypted in transit (PQC) and at rest (TEE sealing)
-3. **Audit Trail**: ZK-proof execution logs exported for compliance verification
-4. **Access Control**: RAM roles restrict API access to TEE gateway only
+## Compliance Targets
 
-## Contact
-
-For deployment inquiries: rwilliamspbg-ops@github
-
----
-
-*Last Updated: June 2024*
-*Deployment Version: v1.0.0*
+1. **Data Residency**: all processing within chosen Alibaba Cloud region
+2. **Encryption**: PQC in transit, TEE sealing at rest (once real sealing lands)
+3. **Audit Trail**: execution logs exported for compliance verification
+4. **Access Control**: RAM roles restricting API access to the TEE gateway

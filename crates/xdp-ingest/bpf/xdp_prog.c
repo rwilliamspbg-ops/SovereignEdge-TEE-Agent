@@ -2,11 +2,35 @@
 // Filters inbound edge telemetry frames on dedicated UDP port
 
 #include <linux/bpf.h>
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_endian.h>
 #include <linux/if_ether.h>
+#include <linux/in.h>
 #include <linux/ip.h>
 #include <linux/udp.h>
+
+/* Use libbpf's helper headers when available; otherwise fall back to the
+ * minimal subset this program needs, so it builds with only clang and
+ * kernel uapi headers (no libbpf-dev). Definitions mirror libbpf. */
+#if defined(__has_include) && __has_include(<bpf/bpf_helpers.h>)
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+#else
+#define SEC(name) __attribute__((section(name), used))
+#define __uint(name, val) int (*name)[val]
+
+/* BPF helper stubs: the verifier resolves calls by helper ID. */
+static void *(*const bpf_ringbuf_reserve)(void *ringbuf, __u64 size,
+                                          __u64 flags) = (void *)131;
+static void (*const bpf_ringbuf_submit)(void *data, __u64 flags) = (void *)132;
+static __u64 (*const bpf_ktime_get_ns)(void) = (void *)5;
+
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define bpf_htons(x) __builtin_bswap16(x)
+#define bpf_ntohs(x) __builtin_bswap16(x)
+#else
+#define bpf_htons(x) (x)
+#define bpf_ntohs(x) (x)
+#endif
+#endif /* bpf_helpers.h fallback */
 
 #define EDGE_TELEMETRY_UDP_PORT 47821
 

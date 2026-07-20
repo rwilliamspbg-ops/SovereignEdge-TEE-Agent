@@ -1,11 +1,12 @@
 //! TEE Gateway - Secure Enclave Runtime for Qwen Cloud Integration
 //!
 //! This module provides:
-//! - Sealed storage for API tokens (TEE-specific)
-//! - Qwen Cloud API integration from within TEE
+//! - TEE backend abstraction (simulated, SGX, SEV-SNP, Alibaba Cloud)
+//! - Qwen Cloud API integration via reqwest
 //! - Execution log generation for ZK verification
 
 use common::TelemetryFrame;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -32,47 +33,109 @@ pub enum GatewayError {
     #[error("Qwen API error: {0}")]
     QwenApiError(String),
 
+    #[error("HTTP error: {0}")]
+    HttpError(#[from] reqwest::Error),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, GatewayError>;
 
-/// Sealed storage for API tokens (TEE-specific)
-pub struct SealedStorage {
-    sealed_data: Vec<u8>,
-    _encryption_key: [u8; 32],
-    attested: bool,
+/// Attestation report from a TEE backend
+#[derive(Debug, Clone)]
+pub struct AttestationReport {
+    pub quote: Vec<u8>,
+    pub measurement: Vec<u8>,
 }
 
-impl SealedStorage {
+/// TEE backend trait for pluggable attestation and sealing
+pub trait TeeBackend: Send + Sync {
+    /// Seal sensitive data (API tokens, credentials)
+    fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>>;
+
+    /// Unseal previously sealed data
+    fn unseal(&self, sealed: &[u8]) -> Result<Vec<u8>>;
+
+    /// Verify TEE attestation and return a report
+    fn attest(&self) -> Result<AttestationReport>;
+}
+
+/// Simulated TEE backend (default, for development/testing)
+pub struct SimulatedTee {
+    encryption_key: [u8; 32],
+}
+
+impl SimulatedTee {
     pub fn new() -> Self {
-        // In production: use TEE-specific sealing (SGX EGETKEY, SEV attestation)
         let mut key = [0u8; 32];
-        // Derive key from TEE hardware identity
         for (i, byte) in key.iter_mut().enumerate() {
             *byte = (i * 7 + 13) as u8;
         }
-
         Self {
+            encryption_key: key,
+        }
+    }
+}
+
+impl Default for SimulatedTee {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TeeBackend for SimulatedTee {
+    fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
+        // Simulated sealing: XOR with key (NOT cryptographically secure)
+        let mut sealed = plaintext.to_vec();
+        for (i, byte) in sealed.iter_mut().enumerate() {
+            *byte ^= self.encryption_key[i % 32];
+        }
+        Ok(sealed)
+    }
+
+    fn unseal(&self, sealed: &[u8]) -> Result<Vec<u8>> {
+        // Simulated unsealing: XOR with key (symmetric)
+        let mut plaintext = sealed.to_vec();
+        for (i, byte) in plaintext.iter_mut().enumerate() {
+            *byte ^= self.encryption_key[i % 32];
+        }
+        Ok(plaintext)
+    }
+
+    fn attest(&self) -> Result<AttestationReport> {
+        let quote = b"simulated-tee-quote-v1".to_vec();
+        let measurement = Sha256::digest(b"simulated-tee-measurement").to_vec();
+        info!("Simulated TEE attestation verified");
+        Ok(AttestationReport { quote, measurement })
+    }
+}
+
+/// Sealed storage for API tokens (TEE-specific)
+pub struct SealedStorage<T: TeeBackend> {
+    tee: T,
+    sealed_data: Vec<u8>,
+    attested: bool,
+}
+
+impl<T: TeeBackend> SealedStorage<T> {
+    pub fn new(tee: T) -> Self {
+        Self {
+            tee,
             sealed_data: Vec::new(),
-            _encryption_key: key,
             attested: false,
         }
     }
 
     /// Seal sensitive data (API tokens, credentials)
     pub fn seal(&mut self, plaintext: &[u8]) -> Result<()> {
-        // In production: use AES-GCM with TEE-derived key
-        // For now, we simulate sealing by storing encrypted data
-        self.sealed_data = plaintext.to_vec();
+        self.sealed_data = self.tee.seal(plaintext)?;
         debug!("Sealed {} bytes of sensitive data", plaintext.len());
         Ok(())
     }
 
     /// Unseal previously sealed data
     pub fn unseal(&self) -> Result<Vec<u8>> {
-        // In production: verify TEE attestation before unsealing
         if !self.attested {
             return Err(GatewayError::AttestationFailed);
         }
@@ -82,16 +145,14 @@ impl SealedStorage {
                 "No sealed data available".to_string(),
             ));
         }
-        Ok(self.sealed_data.clone())
+        self.tee.unseal(&self.sealed_data)
     }
 
     /// Verify TEE attestation
-    pub fn verify_attestation(&mut self) -> Result<bool> {
-        // In production: perform remote attestation with Alibaba Cloud CAS or Intel DCAP
-        // This verifies the enclave is running on genuine hardware with valid measurements
+    pub fn verify_attestation(&mut self) -> Result<AttestationReport> {
+        let report = self.tee.attest()?;
         self.attested = true;
-        info!("TEE attestation verified");
-        Ok(true)
+        Ok(report)
     }
 
     pub fn is_attested(&self) -> bool {
@@ -142,23 +203,29 @@ pub struct GatewayStats {
     pub api_calls: u64,
 }
 
+const SYSTEM_PROMPT: &str = "You are an AI agent analyzing real-time edge telemetry.
+Your task is to provide actionable insights and decisions based on sensor data.
+Respond with structured JSON containing: action, confidence, reasoning.";
+
 /// TEE Gateway relay engine
-pub struct TeeGateway {
-    storage: SealedStorage,
+pub struct TeeGateway<T: TeeBackend> {
+    storage: SealedStorage<T>,
     qwen_api_key: Option<String>,
     qwen_endpoint: String,
     processed_frames: u64,
     session_cache: Arc<Mutex<HashMap<String, SessionState>>>,
+    http_client: Option<Client>,
 }
 
-impl TeeGateway {
-    pub fn new(qwen_endpoint: &str) -> Self {
+impl<T: TeeBackend> TeeGateway<T> {
+    pub fn new(tee: T, qwen_endpoint: &str) -> Self {
         Self {
-            storage: SealedStorage::new(),
+            storage: SealedStorage::new(tee),
             qwen_api_key: None,
             qwen_endpoint: qwen_endpoint.to_string(),
             processed_frames: 0,
             session_cache: Arc::new(Mutex::new(HashMap::new())),
+            http_client: None,
         }
     }
 
@@ -173,12 +240,19 @@ impl TeeGateway {
         // Store in memory for current session
         self.qwen_api_key = Some(String::from_utf8_lossy(api_token).to_string());
 
+        // Initialize HTTP client
+        self.http_client = Some(
+            Client::builder()
+                .build()
+                .expect("failed to build HTTP client"),
+        );
+
         info!("[TEE] Gateway initialized with sealed storage");
         Ok(())
     }
 
     /// Process incoming PQC-decrypted telemetry frame
-    pub fn process_frame(&mut self, frame: &TelemetryFrame) -> Result<QwenResponse> {
+    pub async fn process_frame(&mut self, frame: &TelemetryFrame) -> Result<QwenResponse> {
         self.processed_frames += 1;
 
         // Update session cache
@@ -198,7 +272,7 @@ impl TeeGateway {
         let prompt = self.build_prompt(frame)?;
 
         // Call Qwen Cloud API from within TEE
-        let response = self.call_qwen_api(&prompt)?;
+        let response = self.call_qwen_api(&prompt).await?;
 
         Ok(response)
     }
@@ -207,20 +281,16 @@ impl TeeGateway {
     fn build_prompt(&self, frame: &TelemetryFrame) -> Result<String> {
         let context = String::from_utf8_lossy(&frame.payload);
 
-        let system_prompt = r#"You are an AI agent analyzing real-time edge telemetry.
-Your task is to provide actionable insights and decisions based on sensor data.
-Respond with structured JSON containing: action, confidence, reasoning."#;
-
         let user_prompt = format!(
             "Telemetry Frame #{} from {}\nData: {}\n\nAnalyze and provide decision:",
             frame.frame_id, frame.source_ip, context
         );
 
-        Ok(format!("{}\n\n{}", system_prompt, user_prompt))
+        Ok(format!("{}\n\n{}", SYSTEM_PROMPT, user_prompt))
     }
 
-    /// Call Qwen Cloud API (simulated - in production use reqwest/hyper)
-    fn call_qwen_api(&self, prompt: &str) -> Result<QwenResponse> {
+    /// Call Qwen Cloud API via HTTP (real implementation using reqwest)
+    async fn call_qwen_api(&self, prompt: &str) -> Result<QwenResponse> {
         let api_key = self
             .qwen_api_key
             .as_ref()
@@ -233,32 +303,37 @@ Respond with structured JSON containing: action, confidence, reasoning."#;
         );
         debug!("[TEE] Prompt length: {} chars", prompt.len());
 
-        // In production: actual HTTP POST to Qwen Cloud API
-        // Example endpoint: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+        let client = self
+            .http_client
+            .as_ref()
+            .ok_or_else(|| GatewayError::QwenApiError("HTTP client not initialized".to_string()))?;
 
-        // Simulated response
-        Ok(QwenResponse {
-            request_id: format!("tee-req-{}", self.processed_frames),
-            model: "qwen-max".to_string(),
-            choices: vec![QwenChoice {
-                index: 0,
-                message: QwenMessage {
-                    role: "assistant".to_string(),
-                    content: r#"{"action": "MAINTAIN_COURSE", "confidence": 0.92, "reasoning": "Sensor readings nominal"}"#.to_string(),
-                },
-                finish_reason: "stop".to_string(),
-            }],
-            usage: QwenUsage {
-                prompt_tokens: prompt.len() / 4,
-                completion_tokens: 50,
-                total_tokens: (prompt.len() / 4) + 50,
-            },
-        })
+        let body = serde_json::json!({
+            "model": "qwen-max",
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.1
+        });
+
+        let response = client
+            .post(&self.qwen_endpoint)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| GatewayError::QwenApiError(format!("HTTP request failed: {e}")))?
+            .json::<QwenResponse>()
+            .await
+            .map_err(|e| GatewayError::QwenApiError(format!("JSON parse failed: {e}")))?;
+
+        Ok(response)
     }
 
     /// Generate execution log for ZK verification
     pub fn generate_execution_log(&self, frame_id: u64, response: &QwenResponse) -> Vec<u8> {
-        // Create deterministic execution trace
         let log = format!(
             "FRAME:{}|MODEL:{}|ACTION:{}|TOKENS:{}",
             frame_id,
@@ -267,7 +342,6 @@ Respond with structured JSON containing: action, confidence, reasoning."#;
             response.usage.total_tokens
         );
 
-        // Hash the log for integrity
         let hash = Sha256::digest(log.as_bytes());
 
         format!("{}|HASH:{:x}", log, hash).into_bytes()
@@ -289,12 +363,6 @@ Respond with structured JSON containing: action, confidence, reasoning."#;
     }
 }
 
-impl Default for SealedStorage {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,7 +370,8 @@ mod tests {
 
     #[test]
     fn test_sealed_storage() {
-        let mut storage = SealedStorage::new();
+        let tee = SimulatedTee::new();
+        let mut storage = SealedStorage::new(tee);
         let secret = b"sk-qwen-test-token-12345";
 
         assert!(storage.seal(secret).is_ok());
@@ -318,7 +387,8 @@ mod tests {
 
     #[test]
     fn test_gateway_initialization() {
-        let mut gateway = TeeGateway::new("https://dashscope.aliyuncs.com/api/v1");
+        let tee = SimulatedTee::new();
+        let mut gateway = TeeGateway::new(tee, "https://dashscope.aliyuncs.com/api/v1");
         let token = b"test-api-token";
 
         assert!(gateway.initialize(token).is_ok());
@@ -326,8 +396,9 @@ mod tests {
     }
 
     #[test]
-    fn test_frame_processing() {
-        let mut gateway = TeeGateway::new("https://dashscope.aliyuncs.com/api/v1");
+    fn test_frame_processing_builds_prompt() {
+        let tee = SimulatedTee::new();
+        let mut gateway = TeeGateway::new(tee, "https://dashscope.aliyuncs.com/api/v1");
         gateway.initialize(b"test-token").unwrap();
 
         let frame = TelemetryFrame {
@@ -339,9 +410,10 @@ mod tests {
             metadata: FrameMetadata::default(),
         };
 
-        let response = gateway.process_frame(&frame);
-        assert!(response.is_ok());
-        let resp = response.unwrap();
-        assert_eq!(resp.model, "qwen-max");
+        let prompt = gateway.build_prompt(&frame);
+        assert!(prompt.is_ok());
+        let prompt = prompt.unwrap();
+        assert!(prompt.contains("Telemetry Frame #1"));
+        assert!(prompt.contains(SYSTEM_PROMPT));
     }
 }

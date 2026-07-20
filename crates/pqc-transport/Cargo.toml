@@ -22,3 +22,4 @@ rand = { workspace = true }
 ring = { workspace = true }
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 hpke = { version = "0.12", default-features = false, features = ["std", "x25519"] }
+ml-kem = { workspace = true }

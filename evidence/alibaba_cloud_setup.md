@@ -53,15 +53,15 @@ for the telemetry port in production.
 
 ## 4. Deploy the Gateway
 
-Prerequisite (code work, tracked in the repo): `tee-gateway` is currently
-a library crate — a binary target with real HTTP calls to the Qwen API
-(`call_qwen_api` is mocked today) and real SGX/SEV sealing
-(`SealedStorage` is simulated today) must exist before this step is
-meaningful.
+The `tee_gateway` binary makes real DashScope (Qwen Cloud) API calls;
+SGX/SEV sealing remains simulated pending confidential-VM integration.
 
 ```bash
-cargo build --release -p tee-gateway   # once a binary target exists
+cargo build --release -p tee-gateway
 scp target/release/tee_gateway <instance>:/opt/sovereign-edge/
+# On the instance:
+export QWEN_API_KEY=sk-...
+/opt/sovereign-edge/tee_gateway --prompt "edge telemetry sample"
 ```
 
 Qwen API configuration to apply on the instance:

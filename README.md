@@ -132,6 +132,26 @@ RUST_LOG=info ./target/debug/edge_agent --mode offline \
 Without `--model` (or without the feature), the agent falls back to the
 simulated inference backend.
 
+### Calling Qwen Cloud (real API)
+
+The TEE gateway binary makes real calls to Qwen models on Qwen Cloud via
+the DashScope OpenAI-compatible endpoint:
+
+```bash
+export QWEN_API_KEY=sk-...   # from Alibaba Cloud Model Studio
+cargo run --bin tee_gateway -- --prompt "engine temp 92C, vibration rising"
+
+# Mainland-China accounts:
+cargo run --bin tee_gateway -- --endpoint https://dashscope.aliyuncs.com/compatible-mode/v1 --prompt "..."
+
+# Offline demo without a key:
+cargo run --bin tee_gateway -- --simulate --prompt "..."
+```
+
+It attests + seals the key (simulated TEE flow), sends the telemetry
+prompt to `qwen-max`, and prints the response plus a hash-chained
+execution log for verification.
+
 ### Deploying TEE Gateway on Alibaba Cloud
 
 Deployment has **not been performed yet**. A step-by-step runbook — VM
@@ -177,7 +197,7 @@ Legend: ✅ implemented & tested · 🧪 simulated (real interface, mock backend
 
 ### Phase 3: Confidential Cloud Backend
 - 🧪 TEE gateway with sealed storage — sealing/attestation flow simulated pending real SGX/SEV
-- 🧪 Qwen Cloud API integration — request/response types real, HTTP call mocked
+- ✅ Qwen Cloud API integration — real DashScope calls from the `tee_gateway` binary (`--simulate` for offline demos)
 - ✅ Structured prompt management
 - ✅ Session caching and statistics
 

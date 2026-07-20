@@ -142,24 +142,43 @@ pub struct GatewayStats {
     pub api_calls: u64,
 }
 
+/// Default DashScope OpenAI-compatible endpoint (international).
+/// Mainland China accounts use `https://dashscope.aliyuncs.com/compatible-mode/v1`.
+pub const DASHSCOPE_INTL_ENDPOINT: &str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+
 /// TEE Gateway relay engine
 pub struct TeeGateway {
     storage: SealedStorage,
     qwen_api_key: Option<String>,
     qwen_endpoint: String,
+    qwen_model: String,
+    /// When true, `call_qwen_api` performs a real HTTPS call to DashScope;
+    /// when false it returns a canned response (offline demo / tests).
+    live: bool,
     processed_frames: u64,
     session_cache: Arc<Mutex<HashMap<String, SessionState>>>,
 }
 
 impl TeeGateway {
+    /// Gateway with simulated Qwen backend (offline demos and tests).
     pub fn new(qwen_endpoint: &str) -> Self {
         Self {
             storage: SealedStorage::new(),
             qwen_api_key: None,
             qwen_endpoint: qwen_endpoint.to_string(),
+            qwen_model: "qwen-max".to_string(),
+            live: false,
             processed_frames: 0,
             session_cache: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Gateway that makes real DashScope (Qwen Cloud) API calls.
+    pub fn new_live(qwen_endpoint: &str, model: &str) -> Self {
+        let mut gw = Self::new(qwen_endpoint);
+        gw.qwen_model = model.to_string();
+        gw.live = true;
+        gw
     }
 
     /// Initialize gateway with sealed API token
@@ -219,7 +238,8 @@ Respond with structured JSON containing: action, confidence, reasoning."#;
         Ok(format!("{}\n\n{}", system_prompt, user_prompt))
     }
 
-    /// Call Qwen Cloud API (simulated - in production use reqwest/hyper)
+    /// Call Qwen Cloud: real DashScope HTTPS call in live mode,
+    /// canned response otherwise.
     fn call_qwen_api(&self, prompt: &str) -> Result<QwenResponse> {
         let api_key = self
             .qwen_api_key
@@ -227,14 +247,16 @@ Respond with structured JSON containing: action, confidence, reasoning."#;
             .ok_or(GatewayError::ApiKeyNotInitialized)?;
 
         info!(
-            "[TEE] Calling Qwen API at {} (key length: {})",
+            "[TEE] Calling Qwen API at {} (live: {}, key length: {})",
             self.qwen_endpoint,
+            self.live,
             api_key.len()
         );
         debug!("[TEE] Prompt length: {} chars", prompt.len());
 
-        // In production: actual HTTP POST to Qwen Cloud API
-        // Example endpoint: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+        if self.live {
+            return self.call_dashscope(api_key, prompt);
+        }
 
         // Simulated response
         Ok(QwenResponse {
@@ -252,6 +274,83 @@ Respond with structured JSON containing: action, confidence, reasoning."#;
                 prompt_tokens: prompt.len() / 4,
                 completion_tokens: 50,
                 total_tokens: (prompt.len() / 4) + 50,
+            },
+        })
+    }
+
+    /// Real DashScope call: POST {endpoint}/chat/completions with the
+    /// OpenAI-compatible schema Qwen Cloud exposes.
+    fn call_dashscope(&self, api_key: &str, prompt: &str) -> Result<QwenResponse> {
+        let url = format!(
+            "{}/chat/completions",
+            self.qwen_endpoint.trim_end_matches('/')
+        );
+        let body = serde_json::json!({
+            "model": self.qwen_model,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
+        });
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| GatewayError::QwenApiError(e.to_string()))?;
+
+        let resp = client
+            .post(&url)
+            .bearer_auth(api_key)
+            .json(&body)
+            .send()
+            .map_err(|e| GatewayError::QwenApiError(format!("request failed: {}", e)))?;
+
+        let status = resp.status();
+        let text = resp
+            .text()
+            .map_err(|e| GatewayError::QwenApiError(e.to_string()))?;
+        if !status.is_success() {
+            return Err(GatewayError::QwenApiError(format!(
+                "HTTP {}: {}",
+                status, text
+            )));
+        }
+
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| GatewayError::QwenApiError(format!("bad JSON: {}", e)))?;
+
+        let choices = v["choices"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .enumerate()
+                    .map(|(i, c)| QwenChoice {
+                        index: i,
+                        message: QwenMessage {
+                            role: c["message"]["role"]
+                                .as_str()
+                                .unwrap_or("assistant")
+                                .to_string(),
+                            content: c["message"]["content"].as_str().unwrap_or("").to_string(),
+                        },
+                        finish_reason: c["finish_reason"].as_str().unwrap_or("stop").to_string(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if choices.is_empty() {
+            return Err(GatewayError::QwenApiError(
+                "response contained no choices".to_string(),
+            ));
+        }
+
+        Ok(QwenResponse {
+            request_id: v["id"].as_str().unwrap_or("unknown").to_string(),
+            model: v["model"].as_str().unwrap_or(&self.qwen_model).to_string(),
+            choices,
+            usage: QwenUsage {
+                prompt_tokens: v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as usize,
+                completion_tokens: v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as usize,
+                total_tokens: v["usage"]["total_tokens"].as_u64().unwrap_or(0) as usize,
             },
         })
     }

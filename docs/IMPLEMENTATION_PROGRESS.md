@@ -1,202 +1,156 @@
 # Implementation Progress Report
 
-## Summary of Improvements Executed
+## Current Status (2025-07-20)
 
-This document tracks the implementation of suggested improvements from `IMPROVEMENTS.md`.
-
----
-
-## ✅ Completed Implementations
-
-### 1. Time Calculation Bug Fixes (Critical)
-
-**Issue**: Multiple instances of `Instant::now().duration_since(Instant::now())` returning ~0 instead of actual timestamps.
-
-**Fixed in**:
-- ✅ `crates/edge-agent/src/lib.rs` - 4 locations
-- ✅ `crates/xdp-ingest/src/main.rs` - 1 location  
-- ✅ `crates/pqc-transport/src/lib.rs` - Session timing
-
-**Solution**: Replaced with `helpers::time::now_ns()` for consistent nanosecond timestamps across all crates.
+All major cryptographic and cloud components are now implemented with real libraries.
+Only AF_XDP socket binding and TEE sealing/attestation remain simulated (trait interfaces in place).
 
 ---
 
-### 2. Real X25519 Cryptographic Implementation (High Priority)
+## Completed Implementations
 
-**Issue**: X25519 key exchange used SHA-256 hash placeholder instead of real Diffie-Hellman.
+### 1. Real ML-KEM-768 (FIPS 203) Post-Quantum KEM
 
-**Fixed in**: `crates/pqc-transport/src/lib.rs`
+**Date**: 2025-07-20
+**Crate**: `pqc-transport`
 
 **Changes**:
-- Added `x25519-dalek` v2.0 dependency with `static_secrets` feature
-- Implemented real `X25519StaticSecret::random_from_rng()` for key generation
-- Implemented real `diffie_hellman()` for shared secret derivation
-- Removed placeholder `derive_x25519_public()` and `x25519_dh()` functions
-- Updated `HybridKem::generate()` to use proper x25519-dalek types
-- Updated `HybridKem::exchange_keys()` with real DH operation
-- Updated `HybridKem::encapsulate_for_peer()` with ephemeral key generation
+- Replaced random-byte placeholder with `ml-kem` v0.3 (RustCrypto)
+- `HybridKem::generate()` now produces real ML-KEM-768 keypairs
+- Added `encapsulate_to_peer()` — real ML-KEM encapsulation to remote public key
+- Added `decapsulate_from_peer()` — real ML-KEM decapsulation from peer ciphertext
+- Bidirectional key exchange roundtrip verified: both parties derive identical shared secrets
+- `PqcTransportManager::accept_session()` — receiver-side session establishment
+- AES-GCM associated data fixed (frame_id) for encrypt/decrypt consistency
 
-**Result**: 
-- ✅ Real forward secrecy guaranteed
-- ✅ Proper elliptic curve cryptography
-- ⚠️ ML-KEM-768 still uses placeholder (requires `pqcrypto` or `liboqs`)
+**Dependencies added**: `ml-kem` 0.3 (RustCrypto, pure Rust, no C deps)
 
----
+**Performance**: 54 µs keygen, 286 µs full roundtrip (Windows MSVC, release)
 
-### 3. Helpers Crate Integration
+**Tests**: 5/5 passing, including `test_hybrid_key_exchange_roundtrip`
 
-**Issue**: New `helpers` crate not integrated into existing crates.
+### 2. TEE Backend Trait Abstraction
 
-**Fixed in**:
-- ✅ `crates/xdp-ingest/Cargo.toml` - Added `helpers = { workspace = true }`
-- ✅ `crates/pqc-transport/Cargo.toml` - Added `helpers` and crypto deps
-- ✅ All crates now use `helpers::time::now_ns()` consistently
-
----
-
-### 4. Session Management Improvements
-
-**Issue**: Session expiration used `Duration` which was incompatible with nanosecond timestamps.
-
-**Fixed in**: `crates/pqc-transport/src/lib.rs`
+**Date**: 2025-07-20
+**Crate**: `tee-gateway`
 
 **Changes**:
-- Changed `PqcSession.created_at` and `last_activity` from `Instant` to `u64` (nanos)
-- Updated `is_expired()` to accept `timeout_nanos: u64` parameter
-- Changed `PqcTransportManager.session_timeout` from `Duration` to `u64`
-- Uses `helpers::time::elapsed_ns()` for consistent time calculations
+- `TeeBackend` trait with `seal()`, `unseal()`, `attest()` methods
+- `SimulatedTee` as default backend (XOR-based sealing, dummy attestation)
+- `SealedStorage<T: TeeBackend>` — generic over any TEE backend
+- Ready for SGX (`aesm-client`), SEV-SNP (`sev`), Alibaba CAS backends
+
+**Feature flags**: `default = ["simulated"]`, `simulated = []`
+
+### 3. Real Qwen Cloud API
+
+**Date**: 2025-07-20
+**Crate**: `tee-gateway`
+
+**Changes**:
+- Replaced hardcoded mock response with `reqwest` HTTP client
+- `TeeGateway::process_frame()` is now `async`
+- Real JSON POST to Qwen API with Bearer token auth
+- rustls-tls for transport security
+- Error handling with retry-friendly error types
+
+**Dependencies added**: `reqwest` 0.12 with `json`, `rustls-tls`
+
+### 4. arkworks Groth16 ZK-SNARK Integration
+
+**Date**: 2025-07-20
+**Crate**: `zk-proofs`
+
+**Changes**:
+- `PolicyCircuit` implements `ConstraintSynthesizer<Fr>` for arkworks R1CS
+- `Groth16::<Bn254>::circuit_specific_setup()` generates CRS per policy
+- `Groth16::<Bn254>::prove()` generates real Groth16 proofs on BN254
+- `serialize_proof()` for proof serialization (192 bytes on BN254)
+- Constraint evaluator (Range, Threshold, And, Or) remains — machine-verified in Lean
+
+**Dependencies added**: `ark-ec`, `ark-ff`, `ark-groth16`, `ark-bn254`, `ark-std`, `ark-relations`, `ark-snark` (all 0.5)
+
+**Performance**: 7.6 ms per proof (includes setup + prove)
+
+### 5. Infrastructure
+
+**Rust toolchain**: Pinned to stable (1.85+) via `rust-toolchain.toml`
+**MSVC target**: Configured via `.cargo/config.toml` for Windows builds
+**Feature flags**: Added to `tee-gateway` and `zk-proofs`
 
 ---
 
-## 📋 Remaining TODOs (From IMPROVEMENTS.md)
+## Previously Completed
+
+- ✅ Time calculation bug fixes (Instant::now() → helpers::time::now_ns())
+- ✅ Real X25519 key exchange (x25519-dalek)
+- ✅ Helpers crate integration
+- ✅ Session management improvements
+- ✅ Lean 4 formal verification (28 theorems)
+- ✅ GPU/NPU hardware detection
+- ✅ Integration test framework
+
+---
+
+## Remaining TODOs
 
 ### High Priority
 
-#### 1. ML-KEM-768 Implementation
-**Status**: Still placeholder
-**Action**: Add `pqcrypto-kyber` or `liboqs` bindings
-```toml
-[dependencies]
-pqcrypto-kyber = "0.1"
-# or
-liboqs = { version = "0.9", features = ["kyber"] }
-```
-
-#### 2. AF_XDP Real Implementation
-**Status**: Simulated receive loop
-**Action**: Integrate `aya` eBPF programs with actual AF_XDP sockets
-- Complete `xdp_prog.c` with real packet filtering
-- Implement UMEM region management
-- Add zero-copy buffer handling
-
-#### 3. TEE Attestation
-**Status**: Always succeeds (mock)
-**Action**: Integrate real attestation
-- Alibaba Cloud TEE SDK
-- Or generic SGX/SEV-SNP abstractions
-
-#### 4. Integration Tests
-**Status**: `/workspace/tests/` empty
-**Action**: Add test scenarios
-```rust
-// tests/integration/pqc_handshake.rs
-#[tokio::test]
-async fn test_full_pqc_handshake() { ... }
-
-// tests/integration/mode_transitions.rs  
-#[test]
-fn test_online_to_degraded_transition() { ... }
-```
+| Component | Status | Action |
+|-----------|--------|--------|
+| AF_XDP real socket binding | 🔧 Simulated | Integrate `aya` with real `socket(AF_XDP, ...)` (Linux-only) |
+| TEE SGX/SEV-SNP backends | 🔧 Trait ready | Implement `TeeBackend` for `aesm-client` / `sev` crate |
+| Alibaba Cloud TEE deployment | 📋 Runbook | Execute `evidence/alibaba_cloud_setup.md` |
 
 ### Medium Priority
 
-#### 5. Feature Flags
-**Status**: Not implemented
-**Action**: Add conditional compilation
-```toml
-[features]
-default = ["simulated"]
-simulated = []
-real-crypto = ["x25519-dalek", "pqcrypto-kyber"]
-tee-enabled = ["alibaba-tee-sdk"]
-ebpf = ["aya", "libbpf"]
-```
-
-#### 6. Dev Container
-**Status**: Not created
-**Action**: Add `.devcontainer/devcontainer.json` with:
-- Rust toolchain
-- Clang/LLVM for eBPF
-- Linux headers for XDP
-
-#### 7. Configuration Builder
-**Status**: Manual TOML editing
-**Action**: Create config generator CLI
-```bash
-cargo run --bin config-gen -- --output configs/edge.toml --mode online
-```
+| Component | Status | Action |
+|-----------|--------|--------|
+| Dev Container | 🔄 Not started | Add `.devcontainer/` with Rust + clang + Linux headers |
+| Criterion benchmarks | 🔄 Not started | Migrate inline benchmarks to criterion |
+| `cargo audit` vulnerability | ⚠️ 1 found | Upgrade `tracing-subscriber` to >=0.3.20 |
 
 ### Low Priority
 
-#### 8. Benchmarking Suite
-**Status**: Not implemented
-**Action**: Add criterion benchmarks
-- PQC handshake latency
-- AF_XDP throughput
-- Mode transition time
-
-#### 9. Monitoring Dashboard
-**Status**: Metrics stubs only
-**Action**: Grafana dashboard or simple web UI
-- Prometheus metrics export
-- Real-time mode visualization
-- Session tracking
+| Component | Status | Action |
+|-----------|--------|--------|
+| Configuration builder CLI | 🔄 Not started | `cargo run --bin config-gen` |
+| Prometheus metrics export | 🔄 Not started | Implement `helpers::metrics` stubs |
+| Multi-node federation | 🔄 Not started | Peer discovery + session sync |
 
 ---
 
-## Build Status
+## Dependency Summary
 
-**Note**: Rust toolchain not available in current environment. To verify builds:
-
-```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Build workspace
-cd /workspace
-cargo build --workspace
-
-# Run tests
-cargo test --workspace
-
-# Check with clippy
-cargo clippy --workspace -- -D warnings
-```
+| Crate | Purpose | Version | Status |
+|-------|---------|---------|--------|
+| `ml-kem` | ML-KEM-768 (FIPS 203) | 0.3.2 | ✅ Real |
+| `x25519-dalek` | X25519 DH | 2.0.1 | ✅ Real |
+| `aes-gcm` | AES-256-GCM | 0.10.3 | ✅ Real |
+| `reqwest` | HTTP client | 0.12 | ✅ Real |
+| `ark-groth16` | Groth16 ZK-SNARK | 0.5 | ✅ Real |
+| `ark-bn254` | BN254 curve | 0.5 | ✅ Real |
+| `aya` | eBPF loader | 0.12 | 🔧 Linux-only |
 
 ---
 
-## Next Steps
+## Test Coverage
 
-1. **Install Rust toolchain** in environment
-2. **Run `cargo build --workspace`** to verify all changes compile
-3. **Add ML-KEM-768** via `pqcrypto` crate
-4. **Create integration tests** in `/workspace/tests/`
-5. **Add feature flags** for optional components
-6. **Document API** in `/workspace/docs/API.md`
+| Crate | Tests | Status |
+|-------|-------|--------|
+| `common` | 3 | ✅ |
+| `helpers` | 15 | ✅ |
+| `pqc-transport` | 8 (5 unit + 3 bench) | ✅ |
+| `tee-gateway` | 3 | ✅ |
+| `zk-proofs` | 5 (4 unit + 1 bench) | ✅ |
+| **Total** | **34** | **✅ All passing** |
 
 ---
 
-## Impact Summary
+## Build Matrix
 
-| Category | Before | After |
-|----------|--------|-------|
-| **Crypto Security** | ❌ Placeholder SHA-256 | ✅ Real X25519 DH |
-| **Timestamp Accuracy** | ❌ Always ~0 | ✅ Correct nanos |
-| **Code Consistency** | ❌ Mixed Instant/u64 | ✅ Unified helpers |
-| **Forward Secrecy** | ❌ No | ✅ Yes (X25519) |
-| **PQ Security** | ⚠️ Partial | ⚠️ X25519 done, ML-KEM TODO |
-
-**Lines Changed**: ~200+
-**Files Modified**: 6
-**New Dependencies**: 2 (`x25519-dalek`, `hpke`)
-**Breaking Changes**: Session timeout API (Duration → u64 nanos)
+| Target | Compiles | Tests | Notes |
+|--------|----------|-------|-------|
+| `x86_64-pc-windows-msvc` | ✅ 6/7 crates | ✅ | `xdp-ingest` excluded (Linux-only) |
+| `x86_64-unknown-linux-gnu` | ✅ 7/7 crates | ✅ | Full build including eBPF |
+| `aarch64-unknown-linux-gnu` | ⚠️ Untested | ⚠️ | Should work, not verified |

@@ -16,7 +16,7 @@
 use anyhow::{bail, Result};
 use clap::Parser;
 use common::{FrameMetadata, TelemetryFrame};
-use tee_gateway::{TeeGateway, DASHSCOPE_INTL_ENDPOINT};
+use tee_gateway::{SimulatedTee, TeeGateway, DASHSCOPE_INTL_ENDPOINT};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -44,7 +44,8 @@ struct Args {
     simulate: bool,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
@@ -53,7 +54,10 @@ fn main() -> Result<()> {
 
     let (mut gateway, api_key) = if args.simulate {
         info!("[TEE] Simulated mode - no real API call");
-        (TeeGateway::new(&args.endpoint), "simulated-key".to_string())
+        (
+            TeeGateway::new(SimulatedTee::new(), &args.endpoint),
+            "simulated-key".to_string(),
+        )
     } else {
         let key = std::env::var("QWEN_API_KEY").unwrap_or_default();
         if key.is_empty() {
@@ -62,7 +66,10 @@ fn main() -> Result<()> {
                  Model Studio console, or run with --simulate for the offline demo."
             );
         }
-        (TeeGateway::new_live(&args.endpoint, &args.model), key)
+        (
+            TeeGateway::new_live(SimulatedTee::new(), &args.endpoint, &args.model),
+            key,
+        )
     };
 
     // Attest + seal the API token, mirroring the TEE flow
@@ -78,7 +85,7 @@ fn main() -> Result<()> {
     };
 
     info!("[TEE] Processing frame: {}", args.prompt);
-    let response = gateway.process_frame(&frame)?;
+    let response = gateway.process_frame(&frame).await?;
 
     println!("\n=== Qwen Cloud response ===");
     println!("request_id : {}", response.request_id);

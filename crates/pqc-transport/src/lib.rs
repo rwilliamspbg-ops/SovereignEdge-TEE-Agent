@@ -1,6 +1,6 @@
 //! Post-Quantum Cryptographic Transport Layer
 //!
-//! Implements hybrid key exchange combining X25519 and ML-KEM-768 (Kyber)
+//! Implements hybrid key exchange combining X25519 and ML-KEM-768 (Kyber, FIPS 203)
 //! for resistance against harvest-now-decrypt-later attacks.
 //! Data frames are encrypted using AES-256-GCM.
 
@@ -9,6 +9,10 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use common::{EncryptedFrame, TelemetryFrame};
+use ml_kem::{
+    kem::{Decapsulate, Encapsulate, Kem},
+    DecapsulationKey, EncapsulationKey, Key, KeyExport, MlKem768, Seed, SharedKey,
+};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
@@ -18,10 +22,10 @@ use tracing::debug;
 // Re-export x25519-dalek for real implementations
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 
-// ML-KEM-768 (Kyber) key sizes
+// ML-KEM-768 (Kyber) key sizes (FIPS 203)
 pub const MLKEM768_PUBLIC_KEY_SIZE: usize = 1088;
-pub const MLKEM768_SECRET_KEY_SIZE: usize = 1632;
-pub const MLKEM768_CIPHERTEXT_SIZE: usize = 1568;
+pub const MLKEM768_SEED_SIZE: usize = 64;
+pub const MLKEM768_CIPHERTEXT_SIZE: usize = 1088;
 pub const MLKEM768_SHARED_SECRET_SIZE: usize = 32;
 
 // X25519 key sizes
@@ -53,6 +57,9 @@ pub enum PqcError {
     #[error("Invalid key size: expected {expected}, got {actual}")]
     InvalidKeySize { expected: usize, actual: usize },
 
+    #[error("Invalid ML-KEM key")]
+    InvalidMlKemKey,
+
     #[error("Nonce exhausted for session {session_id}")]
     NonceExhausted { session_id: u64 },
 
@@ -69,21 +76,21 @@ pub type Result<T> = std::result::Result<T, PqcError>;
 #[derive(Clone, Debug)]
 pub struct HybridPublicKey {
     pub x25519_pubkey: [u8; X25519_PUBLIC_KEY_SIZE],
-    pub mlkem_pubkey: [u8; MLKEM768_PUBLIC_KEY_SIZE],
+    pub mlkem_pubkey: Vec<u8>,
 }
 
-/// Hybrid secret key
+/// Hybrid secret key (stores ML-KEM seed for compact serialization)
 #[derive(Clone)]
 pub struct HybridSecretKey {
     pub x25519_seckey: [u8; X25519_SECRET_KEY_SIZE],
-    pub mlkem_seckey: [u8; MLKEM768_SECRET_KEY_SIZE],
+    pub mlkem_seed: Seed,
 }
 
 /// Encapsulated key material for hybrid KEX
 #[derive(Clone, Debug)]
 pub struct HybridEncapsulation {
     pub x25519_ephemeral_pubkey: [u8; X25519_PUBLIC_KEY_SIZE],
-    pub mlkem_ciphertext: [u8; MLKEM768_CIPHERTEXT_SIZE],
+    pub mlkem_ciphertext: Vec<u8>,
 }
 
 /// Session state for PQC-secured channel
@@ -183,22 +190,23 @@ pub struct HybridKem {
 }
 
 impl HybridKem {
-    /// Generate a new hybrid key pair using real x25519-dalek
+    /// Generate a new hybrid key pair using real x25519-dalek and real ML-KEM-768 (FIPS 203)
     pub fn generate() -> Result<Self> {
         // Generate X25519 key pair using x25519-dalek
         let x25519_secret = X25519StaticSecret::random_from_rng(OsRng);
         let x25519_pubkey: X25519PublicKey = (&x25519_secret).into();
 
-        // Generate ML-KEM-768 key pair (placeholder - use pqcrypto in production)
-        let mut mlkem_seckey = [0u8; MLKEM768_SECRET_KEY_SIZE];
-        let mut mlkem_pubkey = [0u8; MLKEM768_PUBLIC_KEY_SIZE];
-        OsRng.fill_bytes(&mut mlkem_seckey);
-        OsRng.fill_bytes(&mut mlkem_pubkey);
+        // Generate real ML-KEM-768 key pair (FIPS 203)
+        let (dk, ek) = MlKem768::generate_keypair();
+
+        // Serialize: decapsulation key as 64-byte seed, encapsulation key as bytes
+        let mlkem_seed: Seed = dk.to_bytes();
+        let mlkem_pubkey: Vec<u8> = ek.to_bytes().as_slice().to_vec();
 
         Ok(Self {
             local_secret: HybridSecretKey {
                 x25519_seckey: x25519_secret.to_bytes(),
-                mlkem_seckey,
+                mlkem_seed,
             },
             local_public: HybridPublicKey {
                 x25519_pubkey: x25519_pubkey.to_bytes(),
@@ -207,17 +215,17 @@ impl HybridKem {
         })
     }
 
-    /// Perform hybrid key exchange with remote peer
-    pub fn exchange_keys(&self, remote_public: &HybridPublicKey) -> Result<[u8; 32]> {
-        // X25519 ECDH using real x25519-dalek
+    /// Perform the receiver side of hybrid key exchange.
+    /// Given an encapsulation from a peer, derive the same shared secret.
+    pub fn decapsulate_from_peer(&self, encapsulation: &HybridEncapsulation) -> Result<[u8; 32]> {
+        // X25519 ECDH: our static secret + peer's ephemeral public
         let x25519_shared = self.x25519_dh_real(
             &self.local_secret.x25519_seckey,
-            &remote_public.x25519_pubkey,
+            &encapsulation.x25519_ephemeral_pubkey,
         )?;
 
-        // ML-KEM-768 encapsulation (placeholder)
-        let (_mlkem_ciphertext, mlkem_shared) =
-            Self::mlkem_encapsulate(&remote_public.mlkem_pubkey)?;
+        // ML-KEM-768 decapsulation: use our decapsulation key + peer's ciphertext
+        let mlkem_shared = self.mlkem_decapsulate(&encapsulation.mlkem_ciphertext)?;
 
         // Combine both shared secrets via HKDF-like construction
         let mut combined = [0u8; HYBRID_SHARED_SECRET_SIZE];
@@ -235,8 +243,10 @@ impl HybridKem {
         Ok(final_key)
     }
 
-    /// Create encapsulated key material to send to peer
-    pub fn encapsulate_for_peer(
+    /// Perform hybrid key exchange (sender side).
+    /// Encapsulates to the remote's public key and returns both the shared secret
+    /// and the encapsulation material that must be sent to the peer.
+    pub fn encapsulate_to_peer(
         &self,
         remote_public: &HybridPublicKey,
     ) -> Result<(HybridEncapsulation, [u8; 32])> {
@@ -244,11 +254,11 @@ impl HybridKem {
         let eph_x25519_secret = X25519StaticSecret::random_from_rng(OsRng);
         let eph_x25519_pubkey: X25519PublicKey = (&eph_x25519_secret).into();
 
-        // X25519 DH with remote using real implementation
+        // X25519 DH: our ephemeral secret + remote's static public
         let x25519_shared =
             self.x25519_dh_real(&eph_x25519_secret.to_bytes(), &remote_public.x25519_pubkey)?;
 
-        // ML-KEM encapsulation (placeholder)
+        // ML-KEM-768 encapsulation (real, FIPS 203)
         let (mlkem_ciphertext, mlkem_shared) =
             Self::mlkem_encapsulate(&remote_public.mlkem_pubkey)?;
 
@@ -280,19 +290,48 @@ impl HybridKem {
         Ok(shared.to_bytes())
     }
 
-    fn mlkem_encapsulate(
-        _pubkey: &[u8; MLKEM768_PUBLIC_KEY_SIZE],
-    ) -> Result<([u8; MLKEM768_CIPHERTEXT_SIZE], [u8; 32])> {
-        // Placeholder - in production use kyber/pqcrypto crate
-        let mut ciphertext = [0u8; MLKEM768_CIPHERTEXT_SIZE];
-        let mut shared_secret = [0u8; 32];
-        OsRng.fill_bytes(&mut ciphertext);
-        OsRng.fill_bytes(&mut shared_secret);
-        Ok((ciphertext, shared_secret))
+    /// Real ML-KEM-768 encapsulation (FIPS 203)
+    fn mlkem_encapsulate(pubkey_bytes: &[u8]) -> Result<(Vec<u8>, [u8; 32])> {
+        let ek_bytes: Key<EncapsulationKey<MlKem768>> = pubkey_bytes
+            .try_into()
+            .map_err(|_| PqcError::InvalidMlKemKey)?;
+        let ek =
+            EncapsulationKey::<MlKem768>::new(&ek_bytes).map_err(|_| PqcError::InvalidMlKemKey)?;
+
+        let (ciphertext, shared_secret) = ek.encapsulate();
+
+        let ct: Vec<u8> = ciphertext.as_slice().to_vec();
+        let ss: [u8; 32] = shared_secret
+            .as_slice()
+            .try_into()
+            .map_err(|_| PqcError::EncapsulationFailed)?;
+
+        Ok((ct, ss))
+    }
+
+    /// Real ML-KEM-768 decapsulation (FIPS 203)
+    fn mlkem_decapsulate(&self, ciphertext_bytes: &[u8]) -> Result<[u8; 32]> {
+        let dk = DecapsulationKey::<MlKem768>::from_seed(self.local_secret.mlkem_seed);
+
+        let ct: ml_kem::kem::Ciphertext<MlKem768> = ciphertext_bytes
+            .try_into()
+            .map_err(|_| PqcError::InvalidMlKemKey)?;
+        let shared_secret: SharedKey = dk.decapsulate(&ct);
+
+        let ss: [u8; 32] = shared_secret
+            .as_slice()
+            .try_into()
+            .map_err(|_| PqcError::DecapsulationFailed)?;
+
+        Ok(ss)
     }
 
     pub fn public_key(&self) -> &HybridPublicKey {
         &self.local_public
+    }
+
+    pub fn seed(&self) -> &Seed {
+        &self.local_secret.mlkem_seed
     }
 }
 
@@ -306,17 +345,19 @@ impl PqcTransportManager {
     pub fn new(session_timeout_secs: u64) -> Self {
         Self {
             sessions: Arc::new(Mutex::new(Vec::new())),
-            session_timeout_nanos: session_timeout_secs * 1_000_000_000, // Convert to nanos
+            session_timeout_nanos: session_timeout_secs * 1_000_000_000,
         }
     }
 
-    /// Establish a new PQC-secured session with a peer
+    /// Establish a new PQC-secured session (sender side).
+    /// The returned encapsulation must be sent to the peer so they can
+    /// derive the same shared secret via `accept_session()`.
     pub fn establish_session(
         &self,
         local_kem: &HybridKem,
         remote_public: &HybridPublicKey,
-    ) -> Result<Arc<Mutex<PqcSession>>> {
-        let shared_key = local_kem.exchange_keys(remote_public)?;
+    ) -> Result<(Arc<Mutex<PqcSession>>, HybridEncapsulation)> {
+        let (encapsulation, shared_key) = local_kem.encapsulate_to_peer(remote_public)?;
 
         // Derive separate send/recv keys using domain separation
         let mut send_key_material = [0u8; 64];
@@ -338,6 +379,39 @@ impl PqcTransportManager {
             "Established new PQC session: {}",
             arc_session.lock().unwrap().session_id()
         );
+        Ok((arc_session, encapsulation))
+    }
+
+    /// Accept a session from the receiver's perspective.
+    /// Given an encapsulation from the sender, derive the same shared secret.
+    pub fn accept_session(
+        &self,
+        local_kem: &HybridKem,
+        encapsulation: &HybridEncapsulation,
+    ) -> Result<Arc<Mutex<PqcSession>>> {
+        let shared_key = local_kem.decapsulate_from_peer(encapsulation)?;
+
+        // Keys are swapped relative to the sender:
+        // sender's SEND = receiver's RECV, sender's RECV = receiver's SEND
+        let mut recv_key_material = [0u8; 64];
+        recv_key_material[0..32].copy_from_slice(&shared_key);
+        recv_key_material[32..36].copy_from_slice(b"SEND");
+        let recv_key = Sha256::digest(recv_key_material);
+
+        let mut send_key_material = [0u8; 64];
+        send_key_material[0..32].copy_from_slice(&shared_key);
+        send_key_material[32..36].copy_from_slice(b"RECV");
+        let send_key = Sha256::digest(send_key_material);
+
+        let session = PqcSession::new(send_key.into(), recv_key.into());
+
+        let arc_session = Arc::new(Mutex::new(session));
+        self.sessions.lock().unwrap().push(arc_session.clone());
+
+        debug!(
+            "Accepted PQC session: {}",
+            arc_session.lock().unwrap().session_id()
+        );
         Ok(arc_session)
     }
 
@@ -347,26 +421,16 @@ impl PqcTransportManager {
         session: Arc<Mutex<PqcSession>>,
         frame: &TelemetryFrame,
     ) -> Result<EncryptedFrame> {
-        use serde_json::to_vec;
-
         let mut sess = session.lock().unwrap();
 
-        // Serialize frame metadata as associated data
-        let meta_json = to_vec(&frame.metadata).unwrap_or_default();
-        let associated_data = meta_json.as_slice();
-
-        // Encrypt payload
-        let ciphertext = sess.encrypt(&frame.payload, associated_data)?;
-
-        // Generate nonce for this encryption
-        let mut nonce = [0u8; 12];
-        OsRng.fill_bytes(&mut nonce);
+        let associated_data = frame.frame_id.to_le_bytes();
+        let ciphertext = sess.encrypt(&frame.payload, &associated_data)?;
 
         Ok(EncryptedFrame {
             frame_id: frame.frame_id,
-            nonce,
+            nonce: [0u8; 12],
             ciphertext,
-            tag: [0u8; 16], // AES-GCM tag is appended to ciphertext in our implementation
+            tag: [0u8; 16],
         })
     }
 
@@ -407,6 +471,24 @@ mod tests {
     fn test_hybrid_keygen() {
         let kem = HybridKem::generate();
         assert!(kem.is_ok());
+        let kem = kem.unwrap();
+        assert!(!kem.public_key().mlkem_pubkey.is_empty());
+        assert_eq!(kem.seed().len(), MLKEM768_SEED_SIZE);
+    }
+
+    #[test]
+    fn test_hybrid_key_exchange_roundtrip() {
+        let alice = HybridKem::generate().unwrap();
+        let bob = HybridKem::generate().unwrap();
+
+        // Alice encapsulates to Bob
+        let (encapsulation, alice_shared) = alice.encapsulate_to_peer(bob.public_key()).unwrap();
+
+        // Bob decapsulates from Alice
+        let bob_shared = bob.decapsulate_from_peer(&encapsulation).unwrap();
+
+        // Both derive the same shared secret
+        assert_eq!(alice_shared, bob_shared);
     }
 
     #[test]
@@ -415,8 +497,42 @@ mod tests {
         let local_kem = HybridKem::generate().unwrap();
         let remote_kem = HybridKem::generate().unwrap();
 
-        let session = manager.establish_session(&local_kem, remote_kem.public_key());
-        assert!(session.is_ok());
+        let (_session, _encapsulation) = manager
+            .establish_session(&local_kem, remote_kem.public_key())
+            .unwrap();
+    }
+
+    #[test]
+    fn test_session_roundtrip() {
+        let manager = PqcTransportManager::new(300);
+        let alice = HybridKem::generate().unwrap();
+        let bob = HybridKem::generate().unwrap();
+
+        // Alice establishes session
+        let (alice_session, encapsulation) =
+            manager.establish_session(&alice, bob.public_key()).unwrap();
+
+        // Bob accepts session
+        let bob_session = manager.accept_session(&bob, &encapsulation).unwrap();
+
+        // Encrypt with Alice, decrypt with Bob
+        let plaintext = b"hello from the edge";
+        let encrypted = manager
+            .encrypt_frame(
+                alice_session,
+                &TelemetryFrame {
+                    frame_id: 1,
+                    source_ip: "10.0.0.1".to_string(),
+                    dest_ip: None,
+                    timestamp_ns: 0,
+                    payload: plaintext.to_vec(),
+                    metadata: common::FrameMetadata::default(),
+                },
+            )
+            .unwrap();
+
+        let decrypted = manager.decrypt_frame(bob_session, &encrypted).unwrap();
+        assert_eq!(decrypted, plaintext);
     }
 
     #[test]
@@ -430,9 +546,76 @@ mod tests {
             .unwrap();
         assert_eq!(manager.session_count(), 1);
 
-        // Cleanup should not remove fresh sessions
         let removed = manager.cleanup_expired();
         assert_eq!(removed, 0);
         assert_eq!(manager.session_count(), 1);
+    }
+
+    #[test]
+    fn bench_mlkem_keygen() {
+        let iters = 100;
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let _ = HybridKem::generate().unwrap();
+        }
+        let elapsed = start.elapsed();
+        eprintln!(
+            "ML-KEM-768 keygen: {:?} per iter ({}/100)",
+            elapsed / iters,
+            iters
+        );
+    }
+
+    #[test]
+    fn bench_mlkem_roundtrip() {
+        let iters = 50;
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let alice = HybridKem::generate().unwrap();
+            let bob = HybridKem::generate().unwrap();
+            let (enc, alice_ss) = alice.encapsulate_to_peer(bob.public_key()).unwrap();
+            let bob_ss = bob.decapsulate_from_peer(&enc).unwrap();
+            assert_eq!(alice_ss, bob_ss);
+        }
+        let elapsed = start.elapsed();
+        eprintln!(
+            "ML-KEM-768 roundtrip: {:?} per iter ({}/50)",
+            elapsed / iters,
+            iters
+        );
+    }
+
+    #[test]
+    fn bench_aes_encrypt_decrypt() {
+        let manager = PqcTransportManager::new(300);
+        let alice = HybridKem::generate().unwrap();
+        let bob = HybridKem::generate().unwrap();
+        let (alice_session, encapsulation) =
+            manager.establish_session(&alice, bob.public_key()).unwrap();
+        let bob_session = manager.accept_session(&bob, &encapsulation).unwrap();
+
+        let frame = common::TelemetryFrame {
+            frame_id: 1,
+            source_ip: "10.0.0.1".to_string(),
+            dest_ip: None,
+            timestamp_ns: 0,
+            payload: vec![0u8; 1024],
+            metadata: common::FrameMetadata::default(),
+        };
+
+        let iters = 1000;
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let enc = manager
+                .encrypt_frame(alice_session.clone(), &frame)
+                .unwrap();
+            let _ = manager.decrypt_frame(bob_session.clone(), &enc).unwrap();
+        }
+        let elapsed = start.elapsed();
+        eprintln!(
+            "AES-256-GCM encrypt+decrypt (1KB): {:?} per iter ({}/1000)",
+            elapsed / iters,
+            iters
+        );
     }
 }

@@ -225,6 +225,12 @@ impl ZkProofGenerator {
         Ok(true)
     }
 
+    /// Evaluator correctness is machine-verified in
+    /// `verification/SovereignEdge/Policy.lean`: `check_iff_sat` proves soundness and
+    /// completeness against declarative satisfaction semantics on well-formed input,
+    /// and `check_wf_some` proves no MissingField error occurs when all referenced
+    /// fields are present. Note the verified short-circuit behavior (`or_masks_late_error`,
+    /// `and_masks_late_error`): early `true` in Or / `false` in And masks later errors.
     fn check_constraint(&self, constraint: &Constraint, action_data: &ActionData) -> Result<bool> {
         match constraint {
             Constraint::Range { field, min, max } => {

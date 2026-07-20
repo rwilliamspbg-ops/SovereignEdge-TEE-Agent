@@ -103,6 +103,12 @@ pub enum CommonError {
 pub type Result<T> = std::result::Result<T, CommonError>;
 
 /// Rolling context buffer with LRU eviction
+///
+/// Eviction bounds are machine-verified in `verification/SovereignEdge/ContextBuffer.lean`:
+/// `push_bytes_bound` and `push_frames_bound` prove the caps hold after every `push`,
+/// under two necessary preconditions (proved necessary by `oversized_frame_breaks_bytes_bound`
+/// and `zero_capacity_breaks_frames_bound`): a single frame must not exceed `max_bytes`,
+/// and `max_frames` must be ≥ 1. Callers must enforce both.
 pub struct ContextBuffer {
     frames: Vec<TelemetryFrame>,
     max_frames: usize,

@@ -109,6 +109,9 @@ impl PqcSession {
         }
     }
 
+    /// Nonce discipline is machine-verified in `verification/SovereignEdge/Nonce.lean`:
+    /// `run_noDup` proves no (key, nonce) pair is ever reused within a session and
+    /// `run_stops_at_limit` proves the counter hard-stops instead of wrapping.
     pub fn encrypt(&mut self, plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>> {
         if self.send_nonce >= (1u128 << 64) {
             return Err(PqcError::NonceExhausted {

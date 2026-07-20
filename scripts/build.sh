@@ -20,7 +20,7 @@ fi
 echo "[1/3] Building eBPF XDP programs..."
 if command -v clang &> /dev/null; then
     mkdir -p target/bpfel-unknown-none/release
-    clang -O2 -target bpf -c src/xdp_ingest/xdp_prog.c -o target/bpfel-unknown-none/release/xdp_prog.o 2>/dev/null || {
+    clang -O2 -target bpf -c crates/xdp-ingest/bpf/xdp_prog.c -o target/bpfel-unknown-none/release/xdp_prog.o 2>/dev/null || {
         echo "  Warning: eBPF build skipped (clang may need BPF target support)"
     }
 else

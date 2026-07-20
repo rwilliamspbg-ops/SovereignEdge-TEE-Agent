@@ -324,10 +324,9 @@ impl<T: TeeBackend> TeeGateway<T> {
         debug!("[TEE] Prompt length: {} chars", prompt.len());
 
         if self.live {
-            let client = self
-                .http_client
-                .as_ref()
-                .ok_or_else(|| GatewayError::QwenApiError("HTTP client not initialized".to_string()))?;
+            let client = self.http_client.as_ref().ok_or_else(|| {
+                GatewayError::QwenApiError("HTTP client not initialized".to_string())
+            })?;
 
             let url = format!(
                 "{}/chat/completions",
@@ -375,10 +374,7 @@ impl<T: TeeBackend> TeeGateway<T> {
                                     .as_str()
                                     .unwrap_or("assistant")
                                     .to_string(),
-                                content: c["message"]["content"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .to_string(),
+                                content: c["message"]["content"].as_str().unwrap_or("").to_string(),
                             },
                             finish_reason: c["finish_reason"]
                                 .as_str()
@@ -400,9 +396,8 @@ impl<T: TeeBackend> TeeGateway<T> {
                 choices,
                 usage: QwenUsage {
                     prompt_tokens: v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as usize,
-                    completion_tokens: v["usage"]["completion_tokens"]
-                        .as_u64()
-                        .unwrap_or(0) as usize,
+                    completion_tokens: v["usage"]["completion_tokens"].as_u64().unwrap_or(0)
+                        as usize,
                     total_tokens: v["usage"]["total_tokens"].as_u64().unwrap_or(0) as usize,
                 },
             });
@@ -427,7 +422,6 @@ impl<T: TeeBackend> TeeGateway<T> {
             },
         })
     }
-
 
     /// Generate execution log for ZK verification
     pub fn generate_execution_log(&self, frame_id: u64, response: &QwenResponse) -> Vec<u8> {

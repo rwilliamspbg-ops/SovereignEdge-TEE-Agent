@@ -207,11 +207,19 @@ const SYSTEM_PROMPT: &str = "You are an AI agent analyzing real-time edge teleme
 Your task is to provide actionable insights and decisions based on sensor data.
 Respond with structured JSON containing: action, confidence, reasoning.";
 
+/// Default DashScope OpenAI-compatible endpoint (international).
+/// Mainland China accounts use `https://dashscope.aliyuncs.com/compatible-mode/v1`.
+pub const DASHSCOPE_INTL_ENDPOINT: &str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+
 /// TEE Gateway relay engine
 pub struct TeeGateway<T: TeeBackend> {
     storage: SealedStorage<T>,
     qwen_api_key: Option<String>,
     qwen_endpoint: String,
+    qwen_model: String,
+    /// When true, `call_qwen_api` performs a real HTTPS call to DashScope;
+    /// when false it returns a canned response (offline demo / tests).
+    live: bool,
     processed_frames: u64,
     session_cache: Arc<Mutex<HashMap<String, SessionState>>>,
     http_client: Option<Client>,
@@ -223,10 +231,20 @@ impl<T: TeeBackend> TeeGateway<T> {
             storage: SealedStorage::new(tee),
             qwen_api_key: None,
             qwen_endpoint: qwen_endpoint.to_string(),
+            qwen_model: "qwen-max".to_string(),
+            live: false,
             processed_frames: 0,
             session_cache: Arc::new(Mutex::new(HashMap::new())),
             http_client: None,
         }
+    }
+
+    /// Gateway that makes real DashScope (Qwen Cloud) API calls.
+    pub fn new_live(tee: T, qwen_endpoint: &str, model: &str) -> Self {
+        let mut gw = Self::new(tee, qwen_endpoint);
+        gw.qwen_model = model.to_string();
+        gw.live = true;
+        gw
     }
 
     /// Initialize gateway with sealed API token
@@ -289,7 +307,8 @@ impl<T: TeeBackend> TeeGateway<T> {
         Ok(format!("{}\n\n{}", SYSTEM_PROMPT, user_prompt))
     }
 
-    /// Call Qwen Cloud API via HTTP (real implementation using reqwest)
+    /// Call Qwen Cloud API: real DashScope HTTPS call in live mode,
+    /// canned response otherwise.
     async fn call_qwen_api(&self, prompt: &str) -> Result<QwenResponse> {
         let api_key = self
             .qwen_api_key
@@ -297,40 +316,118 @@ impl<T: TeeBackend> TeeGateway<T> {
             .ok_or(GatewayError::ApiKeyNotInitialized)?;
 
         info!(
-            "[TEE] Calling Qwen API at {} (key length: {})",
+            "[TEE] Calling Qwen API at {} (live: {}, key length: {})",
             self.qwen_endpoint,
+            self.live,
             api_key.len()
         );
         debug!("[TEE] Prompt length: {} chars", prompt.len());
 
-        let client = self
-            .http_client
-            .as_ref()
-            .ok_or_else(|| GatewayError::QwenApiError("HTTP client not initialized".to_string()))?;
+        if self.live {
+            let client = self
+                .http_client
+                .as_ref()
+                .ok_or_else(|| GatewayError::QwenApiError("HTTP client not initialized".to_string()))?;
 
-        let body = serde_json::json!({
-            "model": "qwen-max",
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.1
-        });
+            let url = format!(
+                "{}/chat/completions",
+                self.qwen_endpoint.trim_end_matches('/')
+            );
+            let body = serde_json::json!({
+                "model": self.qwen_model,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ]
+            });
 
-        let response = client
-            .post(&self.qwen_endpoint)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| GatewayError::QwenApiError(format!("HTTP request failed: {e}")))?
-            .json::<QwenResponse>()
-            .await
-            .map_err(|e| GatewayError::QwenApiError(format!("JSON parse failed: {e}")))?;
+            let resp = client
+                .post(&url)
+                .bearer_auth(api_key)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| GatewayError::QwenApiError(format!("request failed: {e}")))?;
 
-        Ok(response)
+            let status = resp.status();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| GatewayError::QwenApiError(e.to_string()))?;
+            if !status.is_success() {
+                return Err(GatewayError::QwenApiError(format!(
+                    "HTTP {}: {}",
+                    status, text
+                )));
+            }
+
+            let v: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| GatewayError::QwenApiError(format!("bad JSON: {}", e)))?;
+
+            let choices = v["choices"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .enumerate()
+                        .map(|(i, c)| QwenChoice {
+                            index: i,
+                            message: QwenMessage {
+                                role: c["message"]["role"]
+                                    .as_str()
+                                    .unwrap_or("assistant")
+                                    .to_string(),
+                                content: c["message"]["content"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                            },
+                            finish_reason: c["finish_reason"]
+                                .as_str()
+                                .unwrap_or("stop")
+                                .to_string(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if choices.is_empty() {
+                return Err(GatewayError::QwenApiError(
+                    "response contained no choices".to_string(),
+                ));
+            }
+
+            return Ok(QwenResponse {
+                request_id: v["id"].as_str().unwrap_or("unknown").to_string(),
+                model: v["model"].as_str().unwrap_or(&self.qwen_model).to_string(),
+                choices,
+                usage: QwenUsage {
+                    prompt_tokens: v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as usize,
+                    completion_tokens: v["usage"]["completion_tokens"]
+                        .as_u64()
+                        .unwrap_or(0) as usize,
+                    total_tokens: v["usage"]["total_tokens"].as_u64().unwrap_or(0) as usize,
+                },
+            });
+        }
+
+        // Simulated response for offline demos and tests
+        Ok(QwenResponse {
+            request_id: format!("tee-req-{}", self.processed_frames),
+            model: self.qwen_model.clone(),
+            choices: vec![QwenChoice {
+                index: 0,
+                message: QwenMessage {
+                    role: "assistant".to_string(),
+                    content: r#"{"action": "MAINTAIN_COURSE", "confidence": 0.92, "reasoning": "Sensor readings nominal"}"#.to_string(),
+                },
+                finish_reason: "stop".to_string(),
+            }],
+            usage: QwenUsage {
+                prompt_tokens: prompt.len() / 4,
+                completion_tokens: 50,
+                total_tokens: (prompt.len() / 4) + 50,
+            },
+        })
     }
+
 
     /// Generate execution log for ZK verification
     pub fn generate_execution_log(&self, frame_id: u64, response: &QwenResponse) -> Vec<u8> {

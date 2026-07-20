@@ -11,7 +11,7 @@
 use ark_bn254::Bn254;
 use ark_ff::PrimeField;
 use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
-use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
+use ark_relations::gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_snark::SNARK;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
@@ -153,10 +153,10 @@ impl ConstraintSynthesizer<ark_bn254::Fr> for PolicyCircuit {
             let var = cs.new_input_variable(|| Ok(val_fr))?;
             // Trivial constraint: var * 1 = var
             let var2 = cs.new_input_variable(|| Ok(val_fr))?;
-            cs.enforce_constraint(
-                ark_relations::r1cs::LinearCombination::from(var),
-                ark_relations::r1cs::LinearCombination::from(one),
-                ark_relations::r1cs::LinearCombination::from(var2),
+            cs.enforce_r1cs_constraint(
+                || ark_relations::gr1cs::LinearCombination::from(var),
+                || ark_relations::gr1cs::LinearCombination::from(one),
+                || ark_relations::gr1cs::LinearCombination::from(var2),
             )?;
             let _ = i; // suppress unused warning
         }
